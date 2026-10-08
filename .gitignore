@@ -7,3 +7,4 @@ dashboard.html
 .venv/
 __pycache__/
 .pytest_cache/
+CLAUDE.md
