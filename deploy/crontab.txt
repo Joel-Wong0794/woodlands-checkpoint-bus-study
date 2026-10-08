@@ -1,3 +1,3 @@
 # Install on the VM with:  crontab deploy/crontab.txt
 # Stage 2: poll both stops every minute. flock stops two runs overlapping.
-* * * * * cd $HOME/causeway-bus && set -a && . ./.env && set +a && flock -n /tmp/collector.lock .venv/bin/python collector.py >> logs/collector.log 2>&1
+* * * * * cd $HOME/woodlands-checkpoint-bus-study && set -a && . ./.env && set +a && flock -n /tmp/collector.lock .venv/bin/python collector.py >> logs/collector.log 2>&1

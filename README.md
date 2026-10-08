@@ -4,7 +4,7 @@ How long buses take from JB Checkpoint (46219) to Woodlands Checkpoint (46109). 
 
 ## Check the collector
 
-Run on the VM from `~/causeway-bus`. Times are stored in Singapore time, so `now` is shifted by +8 hours.
+Run on the VM from `~/woodlands-checkpoint-bus-study`. Times are stored in Singapore time, so `now` is shifted by +8 hours.
 
 | Question | Command |
 |---|---|
