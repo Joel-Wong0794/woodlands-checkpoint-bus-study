@@ -3,6 +3,55 @@
 > Put this file in an empty folder as `CLAUDE.md`, open Claude Code there, and say:
 > **"Read CLAUDE.md and do Stage 0. Stop after each stage so I can review."**
 
+## 0. Progress — read this first when resuming
+
+Last updated 2026-10-09 00:35 SGT. **Stage 2 is running; waiting on its 1-hour check.**
+
+| Stage | Status |
+|---|---|
+| 0 Probe | Code done, checks 3–6 passed. **Open:** check 2 was only run at night (22:40, 00:27). `SERVICES` still has all 4 until a daytime check decides. Settle it from the VM's daytime data rather than another probe run |
+| 1 Collector | ✅ Done. 7 tests pass. 30-min laptop run: 68 `poll_runs`, all ok, max gap 116 s |
+| 2 Deploy | Cron running on the VM since 2026-10-09 00:30 SGT. LTA answers from the US ✅. **Open:** (a) after ≥ 1 h, `SELECT count(*), sum(ok) FROM poll_runs` ≈ 120 each; (b) disk type is *Standard* (Compute Engine → Storage → Disks); (c) Billing → Reports, group by SKU, for any External IP charge |
+| 3–6 | Not started. Stage 3 is next after the open items above |
+
+### Where things are
+
+| Item | Value |
+|---|---|
+| GitHub | `https://github.com/Joel-Wong0794/woodlands-checkpoint-bus-study` (public) |
+| GCP project | `woodlands-checkpoint-bus-study` |
+| VM | `instance-20261008-160932`, zone `us-central1-a`, e2-micro, Debian 12 x86_64, TZ Asia/Singapore |
+| Code on the VM | `~/woodlands-checkpoint-bus-study` (**not** `causeway-bus`; crontab and README use this path) |
+| Live database | On the VM: `~/woodlands-checkpoint-bus-study/data/causeway.db`. The laptop `data/causeway.db` only has the 30-min test from 2026-10-08 |
+| Logs | On the VM: `~/woodlands-checkpoint-bus-study/logs/collector.log` |
+| Update the VM | `git push` on the laptop, then `git pull` on the VM. Cron uses the new code on the next minute |
+
+### Deviations from the spec below
+
+| Item | What changed |
+|---|---|
+| Folder name | VM and crontab use `woodlands-checkpoint-bus-study`, not `causeway-bus` |
+| `probe.py` | Also reads the key from `.env` (Windows has no `. ./.env`). `python probe.py 1` runs only checks 1–2. `PV/ODBus` answers 404 for an unpublished month, so it falls back up to 3 months |
+| Tests | Run from the project root with `python -m pytest` (puts the root on the import path; no extra config file) |
+
+### Findings so far (late-night data only, 2026-10-08 22:46–23:19)
+
+| Finding | Why it matters |
+|---|---|
+| GPS (`Monitored = 1`) share at 46219: 950 36%, 170 12%, 160 2%, 170X 0% | If a service is timetable-only at 46219, its trips aren't measured. Decides `SERVICES` |
+| Some buses start their trip at 46219 (`OriginCode = 46219`, e.g. 160) and sit "due now" while the ETA keeps slipping | Their "arrival" at 46219 is really a departure slot |
+| The front bus often vanishes while still 4–15 min away and sometimes comes back (e.g. a GPS 170 vanished at 23:07, returned at 23:11) | Can cause a missed arrival → `day_ok = False`. Add a Stage 3 test built from these real rows |
+| LTA predicts the crossing at ~8–10 min (same GPS bus listed at both stops), but one measured 170 took ~20 min while its ETA at 46109 kept slipping | Confirms we must measure arrivals, not trust ETAs |
+| A GPS 950 was due at 46109 *before* 46219 (23:13–23:16) | Loop-route quirk. Check with daytime data; it could create a false arrival at 46219 |
+| GPS position is identical for the same bus in both stops' lists | Possible future bus ID to replace FIFO pairing (limitation #1). Not in scope unless decided |
+| `PV/ODBus` Aug 2026: trips 46219→46109 in hours 00, 01, 04–23, none at 02–03 | Supports the 03:00 service-day boundary |
+
+### Resume checklist
+
+1. SSH into the VM (Compute Engine → VM instances → SSH), `cd ~/woodlands-checkpoint-bus-study`, run the README "check the collector" one-liners. Close the open Stage 2 items.
+2. After a daytime of data: copy the VM database to the laptop (SSH window → *Download file*, path `/home/<user>/woodlands-checkpoint-bus-study/data/causeway.db`), rerun the GPS-share and flicker analysis, and trim `SERVICES`. That closes Stage 0.
+3. Start Stage 3: `tests/simulate.py` and `tests/test_trips.py` first.
+
 ## 1. Goal
 
 Measure how long buses **160 / 170 / 170X / 950** take to go from **bus stop 46219 (Johor Bahru Checkpoint)** to **bus stop 46109 (Woodlands Checkpoint)**, by 15-minute slot, and show it on a **rolling 14-day dashboard**.
@@ -190,7 +239,7 @@ Data takes 2 weeks to build up, so deploy before writing the analysis. Walk me t
 `deploy/crontab.txt` (Stage 2 line only for now):
 
 ```cron
-* * * * * cd $HOME/causeway-bus && set -a && . ./.env && set +a && flock -n /tmp/collector.lock .venv/bin/python collector.py >> logs/collector.log 2>&1
+* * * * * cd $HOME/woodlands-checkpoint-bus-study && set -a && . ./.env && set +a && flock -n /tmp/collector.lock .venv/bin/python collector.py >> logs/collector.log 2>&1
 ```
 
 `flock` stops two runs from overlapping.
@@ -286,8 +335,8 @@ Implementation:
 Add to `deploy/crontab.txt`:
 
 ```cron
-*/15 * * * * cd $HOME/causeway-bus && .venv/bin/python dashboard.py && gcloud storage cp dashboard.html gs://<BUCKET>/index.html --cache-control="no-cache" >> logs/dashboard.log 2>&1
-0 3 * * 0 cd $HOME/causeway-bus && sqlite3 data/causeway.db ".backup data/backup.db" && gcloud storage cp data/backup.db gs://<BACKUP_BUCKET>/causeway-$(date +\%F).db >> logs/backup.log 2>&1
+*/15 * * * * cd $HOME/woodlands-checkpoint-bus-study && .venv/bin/python dashboard.py && gcloud storage cp dashboard.html gs://<BUCKET>/index.html --cache-control="no-cache" >> logs/dashboard.log 2>&1
+0 3 * * 0 cd $HOME/woodlands-checkpoint-bus-study && sqlite3 data/causeway.db ".backup data/backup.db" && gcloud storage cp data/backup.db gs://<BACKUP_BUCKET>/causeway-$(date +\%F).db >> logs/backup.log 2>&1
 ```
 
 Use a **separate private bucket** for backups; the dashboard bucket is public.
