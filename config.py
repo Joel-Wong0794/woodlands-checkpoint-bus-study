@@ -3,8 +3,12 @@
 STOP_A = "46219"  # JB Checkpoint (start)
 STOP_B = "46109"  # Woodlands Checkpoint (end)
 
-# Trimmed after Stage 0 to the services that pass checks 1-3.
-SERVICES = ("160", "170", "170X", "950")
+# The collector stores all 4, so a later design can still use 160 and 170X.
+COLLECT_SERVICES = ("160", "170", "170X", "950")
+
+# Analysis only uses the services that pass Stage 0 checks 1-3.
+# 160 and 170X start at 46219 and have no GPS there in the daytime (9 Oct data), so they fail check 2.
+SERVICES = ("170", "950")
 
 # Copied from probe.py check 4 (LTA BusStops). Don't guess: {stop: (lat, lon)}
 STOP_COORDS = {

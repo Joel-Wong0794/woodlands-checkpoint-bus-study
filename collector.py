@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from config import SERVICES, STOP_A, STOP_B
+from config import COLLECT_SERVICES, STOP_A, STOP_B
 
 URL = "https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival"
 SGT = ZoneInfo("Asia/Singapore")
@@ -121,8 +121,8 @@ def poll_stop(con, stop, key):
     polled_at = datetime.now(SGT).strftime(TIME_FMT)
     try:
         payload = fetch(stop, key)
-        rows = parse_bus_arrival(payload, stop, polled_at, SERVICES)
-        n = count_services(payload, SERVICES)
+        rows = parse_bus_arrival(payload, stop, polled_at, COLLECT_SERVICES)
+        n = count_services(payload, COLLECT_SERVICES)
         save(con, {"polled_at": polled_at, "stop": stop, "ok": 1, "n_services": n, "error": None}, rows)
         return f"{stop} ok {n}svc {len(rows)}rows", True
     except Exception as e:  # one stop failing must not stop the other
