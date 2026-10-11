@@ -6,13 +6,13 @@ polls -> gps_points (one row per bus per minute) -> link_tracks (one track ~ one
 import numpy as np
 import pandas as pd
 
-from config import (BLIND_FLAG_MIN, GAP_SEC, GATE_A_LAT, LINK_SLACK_M, MAX_LINK_M, MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN,
+from config import (BACK_M, BLIND_FLAG_MIN, GAP_SEC, GROUPS, GATE_A_LAT, LINK_SLACK_M, MAX_LINK_M, MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN,
                     MIN_TRIP_MIN, MIN_TRIPS_PER_SLOT, SERVICE_DAY_START_HOUR, SERVICES, SLOT_MIN, STOP_A, STOP_B,
                     STOP_COORDS, ZONE_A_M, ZONE_B_M)
 
 DUP_M = 60  # the same bus in both stops' lists, polled a second apart, can differ by ~20 m
 POINT_COLS = ["t", "minute", "service", "lat", "lon", "dist_a", "dist_b", "at_a", "at_b"]
-TRIP_COLS = ["service", "track", "service_day", "reached_a", "left_a", "reached_b", "wait_min", "ride_min",
+TRIP_COLS = ["service", "group", "track", "service_day", "reached_a", "left_a", "reached_b", "wait_min", "ride_min",
              "blind_min", "n_between", "blind", "ok", "reason"]
 
 
@@ -22,6 +22,10 @@ def metres(lat1, lon1, lat2, lon2):
     dy = (np.asarray(lat2) - lat1) * k
     dx = (np.asarray(lon2) - lon1) * k * np.cos(np.radians(lat1))
     return np.hypot(dx, dy)
+
+
+def group_of(service):
+    return next(g for g, services in GROUPS.items() if service in services)
 
 
 def to_frame(rows, cols):
@@ -70,18 +74,22 @@ def link_tracks(points):
     track only takes a point still standing at the stop (within DUP_M) in the next minute.
     Points go first to tracks seen in the previous minute (closest first), then to arrived buses, and only
     then to tracks that have been lost for a while, so a lost track can't take over a bus being followed.
+    South of the JB checkpoint a track can't move more than BACK_M against its direction: buses only turn round
+    at the checkpoint, so such a link would be a jump to another bus (e.g. one that just switched its GPS on).
     """
     if points.empty:
         return points.assign(track=pd.Series(dtype=str))
     track = pd.Series("", index=points.index)
     for svc, ps in points.groupby("service"):
-        active = []  # [id, last_t, lat, lon, last fix was at 46109]
+        active = []  # [id, last_t, lat, lon, last fix was at 46109, heading: -1 south / +1 north / 0 unknown]
         n = 0
         for minute, g in ps.groupby("minute"):
             active = [a for a in active if (minute - a[1]).total_seconds() <= (60 if a[4] else MAX_LOST_MIN * 60)]
             cand = []
             for i, r in g.iterrows():
-                for j, (_, last_t, la, lo, arrived) in enumerate(active):
+                for j, (_, last_t, la, lo, arrived, heading) in enumerate(active):
+                    if la < GATE_A_LAT and heading * (r.lat - la) * 111_195 < -BACK_M:
+                        continue
                     gap = (minute - last_t).total_seconds()
                     d = float(metres(la, lo, r.lat, r.lon))
                     reach = DUP_M if arrived else min(MAX_SPEED_MS * gap + LINK_SLACK_M, MAX_LINK_M)
@@ -94,12 +102,14 @@ def link_tracks(points):
                     used_i.add(i)
                     used_j.add(j)
                     track[i] = active[j][0]
-                    active[j][1:] = [minute, g.at[i, "lat"], g.at[i, "lon"], g.at[i, "at_b"]]
+                    move = (g.at[i, "lat"] - active[j][2]) * 111_195
+                    heading = active[j][5] if abs(move) < BACK_M else int(np.sign(move))  # a wobble never flips it
+                    active[j][1:] = [minute, g.at[i, "lat"], g.at[i, "lon"], g.at[i, "at_b"], heading]
             for i in g.index:
                 if i not in used_i:
                     n += 1
                     track[i] = f"{svc}-{n}"
-                    active.append([track[i], minute, g.at[i, "lat"], g.at[i, "lon"], g.at[i, "at_b"]])
+                    active.append([track[i], minute, g.at[i, "lat"], g.at[i, "lon"], g.at[i, "at_b"], 0])
     return points.assign(track=track)
 
 
@@ -151,6 +161,7 @@ def check_trips(trips, gaps):
     t = trips.copy()
     if t.empty:
         return pd.DataFrame(columns=TRIP_COLS)
+    t["group"] = t.service.map(group_of)
     t["service_day"] = (t.left_a - pd.Timedelta(hours=SERVICE_DAY_START_HOUR)).dt.strftime("%Y-%m-%d")
     t["blind"] = t.blind_min > BLIND_FLAG_MIN
     in_gap = [any((gaps.gap_from < r.reached_b) & (gaps.gap_to > r.left_a)) for r in t.itertuples()]
@@ -171,17 +182,31 @@ def measure_trips(poll_runs, polls, services=SERVICES):
 
 # ---------- 5. Stats ----------
 
-def slot_stats(trips, by=("weekday", "slot"), slot_min=SLOT_MIN):
+def slot_stats(trips, by=("group", "weekday", "slot"), slot_min=SLOT_MIN):
     """n, median, P25, P75 of ride minutes per group. Slot = time left 46219, rounded down. Thin slots hidden."""
     t = trips[trips.ok.astype(bool)].copy() if "ok" in trips else trips.copy()
     cols = [*by, "n", "median", "p25", "p75"]
     if t.empty:
         return pd.DataFrame(columns=cols)
+    t["group"] = t.service.map(group_of)
     t["weekday"] = pd.to_datetime(t.service_day).dt.strftime("%a")
     t["slot"] = pd.to_datetime(t.left_a).dt.floor(f"{slot_min}min").dt.strftime("%H:%M")
     s = t.groupby(list(by)).ride_min.agg(n="size", median="median", p25=lambda x: x.quantile(.25),
                                           p75=lambda x: x.quantile(.75)).reset_index()
     return s[s.n >= MIN_TRIPS_PER_SLOT][cols].reset_index(drop=True)
+
+
+def departures_seen(trips, slot_min=SLOT_MIN):
+    """Buses seen leaving the berth per group, service-day and slot (dropped trips included: they still left).
+
+    A lower bound on the real frequency: buses without GPS when they leave are invisible.
+    """
+    cols = ["group", "service_day", "slot", "departures"]
+    if trips.empty:
+        return pd.DataFrame(columns=cols)
+    t = trips.assign(group=trips.service.map(group_of),
+                     slot=pd.to_datetime(trips.left_a).dt.floor(f"{slot_min}min").dt.strftime("%H:%M"))
+    return t.groupby(["group", "service_day", "slot"]).size().rename("departures").reset_index()[cols]
 
 
 def day_quality(trips, gaps):

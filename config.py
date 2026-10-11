@@ -6,9 +6,12 @@ STOP_B = "46109"  # Woodlands Checkpoint (end)
 # The collector stores all 4, so a later design can still use 160 and 170X.
 COLLECT_SERVICES = ("160", "170", "170X", "950")
 
-# Analysis only uses the services that pass Stage 0 checks 1-3.
-# 160 and 170X start at 46219 and have no GPS there in the daytime (9 Oct data), so they fail check 2.
-SERVICES = ("170", "950")
+# Analysis uses all 4. 160 and 170X failed Stage 0 check 2 (no GPS while waiting at 46219), but they switch GPS on
+# when they leave, which is all the GPS-track method needs (Stage 3, 11 Oct data).
+SERVICES = ("160", "170", "170X", "950")
+
+# A commuter at the JB checkpoint boards any of 160/170/170X from the same berth; 950 has its own. Stats are per group.
+GROUPS = {"160/170/170X": ("160", "170", "170X"), "950": ("950",)}
 
 # Copied from probe.py check 4 (LTA BusStops). Don't guess: {stop: (lat, lon)}
 STOP_COORDS = {
@@ -27,6 +30,7 @@ ZONE_B_M = 100             # "at 46109" = within this distance (real arrivals st
 MAX_SPEED_MS = 25          # a bus can't move faster than this (~90 km/h) between fixes...
 LINK_SLACK_M = 200         # ...plus this much GPS noise
 MAX_LINK_M = 2500          # never link fixes further apart than this (the crossing is ~2 km)
+BACK_M = 150              # on the Causeway a track can't move this far against its direction (buses don't U-turn there)
 MAX_LOST_MIN = 15          # a track survives this long without a fix (buses drop off the list and come back)
 BLIND_FLAG_MIN = 5         # a ride with a longer stretch without fixes is flagged (time less precise)
 SLOT_MIN = 60              # slot size for stats; hourly until there are enough weeks of data

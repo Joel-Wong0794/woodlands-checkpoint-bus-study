@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from tests.simulate import random_buses, simulate
-from trips import day_quality, gps_points, link_tracks, measure_trips, poll_gaps, slot_stats
+from trips import day_quality, departures_seen, gps_points, link_tracks, measure_trips, poll_gaps, slot_stats
 
 DAY = "2026-10-09"
 
@@ -97,6 +97,26 @@ def test_flicker_mid_crossing_still_one_trip():
 def test_bunching_gives_two_trips():
     buses = [bus("10:00", "10:03", "10:20"), bus("10:00:30", "10:03:30", "10:20:30")]
     assert_recovered(run(buses), buses)
+
+
+def test_no_jump_back_to_a_bus_switching_gps_on():
+    """Real 170X pattern: bus X drops out of the lists mid-Causeway; bus W turns its GPS on 2 min after leaving JB,
+    ~340 m behind X's last fix. X's lost track must not grab W (the 'bus' would move back north), which would
+    give a false 26-min trip from X's departure to W's arrival. Neither bus is seen end to end: no trip at all."""
+    x = bus("10:00", "10:02", "10:20")
+    w = bus("10:09", "10:10", "10:28")
+    flicker = [(0, f"{DAY} 10:08", f"{DAY} 10:25"), (1, f"{DAY} 09:00", f"{DAY} 10:11:59")]
+    trips = run([x, w], flicker=flicker)
+    assert trips.ok.sum() == 0, trips[["left_a", "reached_b", "ride_min"]]
+
+
+def test_northbound_bus_can_turn_at_jb():
+    """A loop bus coming north from Singapore turns round at the JB checkpoint: that reversal is allowed.
+    (Its stop at 46109 on the way north ends a track by design, so start after it has left 46109.)"""
+    b = bus("10:12", "10:34", "10:45", service="950", via_b=True)
+    polls = simulate([b], f"{DAY} 10:02", f"{DAY} 11:00")[1]
+    tracks = link_tracks(gps_points(polls, ("950",)))
+    assert tracks.track.nunique() == 1 and tracks.lat.max() > 1.465
 
 
 def test_no_gps_no_trip():
@@ -324,11 +344,36 @@ def test_slot_stats():
         rows.append({"service": "170", "service_day": DAY, "left_a": pd.Timestamp("2026-10-10 01:20"),
                      "ride_min": ride, "ok": True})
     s = slot_stats(pd.DataFrame(rows))
-    assert list(s.columns) == ["weekday", "slot", "n", "median", "p25", "p75"]
+    assert list(s.columns) == ["group", "weekday", "slot", "n", "median", "p25", "p75"]
     assert len(s) == 1
     r = s.iloc[0]
-    assert (r.weekday, r.slot, r.n, r["median"], r.p25, r.p75) == ("Fri", "07:00", 4, 25, 17.5, 32.5)
+    assert (r.group, r.weekday, r.slot, r.n, r["median"], r.p25, r.p75) == ("160/170/170X", "Fri", "07:00", 4, 25, 17.5, 32.5)
     assert slot_stats(pd.DataFrame(rows), by=("slot",), slot_min=30).empty  # 2 + 2 trips: both slots too thin
+
+
+def test_slot_stats_pools_a_group_not_950():
+    """160, 170 and 170X leave from the same berth, so they pool into one group; 950 stays separate."""
+    rows = [{"service": svc, "service_day": DAY, "left_a": pd.Timestamp(f"{DAY} 09:05"), "ride_min": r, "ok": True}
+            for svc, r in (("160", 10), ("170", 12), ("170X", 14), ("950", 30), ("950", 31), ("950", 32))]
+    s = slot_stats(pd.DataFrame(rows)).set_index("group")
+    assert s.loc["160/170/170X", "n"] == 3 and s.loc["160/170/170X", "median"] == 12
+    assert s.loc["950", "n"] == 3 and s.loc["950", "median"] == 31
+
+
+def test_measure_trips_adds_group():
+    trips = run([bus("10:00", "10:02", "10:20", service="950"), bus("11:00", "11:02", "11:20")])
+    assert sorted(trips.group) == ["160/170/170X", "950"]
+
+
+def test_departures_seen():
+    rows = [{"service": svc, "service_day": DAY, "left_a": pd.Timestamp(f"{DAY} {hhmm}"), "ok": ok}
+            for svc, hhmm, ok in (("160", "09:05", True), ("170X", "09:40", True), ("170", "09:59", False),
+                                  ("950", "09:10", True), ("170", "10:01", True))]
+    d = departures_seen(pd.DataFrame(rows)).set_index(["group", "slot"])
+    assert d.loc[("160/170/170X", "09:00"), "departures"] == 3  # a dropped trip still left the berth
+    assert d.loc[("160/170/170X", "10:00"), "departures"] == 1
+    assert d.loc[("950", "09:00"), "departures"] == 1
+    assert list(departures_seen(pd.DataFrame(rows)).columns) == ["group", "service_day", "slot", "departures"]
 
 
 def test_slot_stats_empty():
