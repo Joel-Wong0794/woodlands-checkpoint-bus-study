@@ -22,6 +22,10 @@ SGT = ZoneInfo("Asia/Singapore")
 
 PROFILE_TITLE = "Ride time through the day"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
+WAIT_TITLE = "Waiting at the JB berth"
+# Services with GPS while they wait at 46219 (9-11 Oct data). 160 and 170X only switch it on when they leave,
+# so their measured "wait" is just the last minute or two and is left out.
+DWELL_SERVICES = ("170", "950")
 FRESH_MIN = 5        # a bus counts as "on the bridge now" only if its last GPS fix is this recent
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
@@ -101,6 +105,33 @@ def best_worst(stats, group, n=3):
     return pd.concat(rows)[cols].reset_index(drop=True) if rows else pd.DataFrame(columns=cols)
 
 
+def berth_wait(trips):
+    """How long buses sit at the JB berth before leaving: median etc. per group, day type and slot."""
+    t = trips[trips.ok.astype(bool) & trips.service.isin(DWELL_SERVICES)]
+    return T.slot_stats(t.assign(ride_min=t.wait_min), by=("group", "day_type", "slot"))
+
+
+def departures_per_hour(trips, runs):
+    """Average buses seen leaving the berth per hour, per group, day type and slot (a lower bound).
+
+    Averaged only over days that were polled in that slot, so a partial first day or today's
+    future hours don't dilute it.
+    """
+    cols = ["group", "day_type", "slot", "per_hour"]
+    d = T.departures_seen(trips)
+    if d.empty:
+        return pd.DataFrame(columns=cols)
+    polled = runs[(runs.ok == 1) & (runs.stop == STOP_A)]
+    t = pd.to_datetime(polled.polled_at)
+    cov = pd.DataFrame({"service_day": t.map(service_day), "slot": t.dt.floor(f"{SLOT_MIN}min").dt.strftime("%H:%M")})
+    cov = cov.drop_duplicates().assign(day_type=lambda c: c.service_day.map(day_type))
+    n_days = cov.groupby(["day_type", "slot"]).size().rename("n_days")
+    d = d.assign(day_type=d.service_day.map(day_type)).groupby(["group", "day_type", "slot"]).departures.sum()
+    d = d.reset_index().join(n_days, on=["day_type", "slot"])
+    d["per_hour"] = d.departures / d.n_days * 60 / SLOT_MIN
+    return d[cols]
+
+
 def tiles(trips, stats, bridge, group, now, gap_today):
     """Values for the Now / Typical / On the bridge now tiles of one group."""
     ok = trips[trips.ok & (trips.group == group)]
@@ -155,7 +186,7 @@ def base_layout(fig, height):
     return fig
 
 
-def profile_fig(ok, stats, group, today):
+def profile_fig(ok, stats, group, today, ytitle="ride (min)", height=340):
     fig = go.Figure()
     for dtype in ("weekday", "weekend"):
         s = stats[(stats.group == group) & (stats.day_type == dtype)].copy()
@@ -181,9 +212,24 @@ def profile_fig(ok, stats, group, today):
                                  marker=dict(size=9, color=LIGHT["today"], line=dict(width=2, color=LIGHT["surface"])),
                                  customdata=list(zip(t.service, t.left_a.dt.strftime("%H:%M"))),
                                  hovertemplate="bus %{customdata[0]} left %{customdata[1]}: %{y:.0f} min<extra></extra>"))
-    fig.update_yaxes(title_text="ride (min)", rangemode="tozero")
+    fig.update_yaxes(title_text=ytitle, rangemode="tozero")
     fig.update_xaxes(title_text="time the bus left JB checkpoint")
-    return base_layout(fig, 340)
+    return base_layout(fig, height)
+
+
+def departures_fig(deps, group):
+    fig = go.Figure()
+    for i, dtype in enumerate(("weekday", "weekend")):
+        d = deps[(deps.group == group) & (deps.day_type == dtype)]
+        if d.empty:
+            continue
+        x = hour_x(pd.to_datetime(d.slot, format="%H:%M")) + SLOT_MIN / 120
+        fig.add_trace(go.Bar(x=x - 0.2 + 0.4 * i, y=d.per_hour, width=0.38, name=dtype.title(),
+                             marker=dict(color=LIGHT[dtype]),
+                             hovertemplate=f"{dtype} %{{x:.0f}}h: at least %{{y:.1f}} buses<extra></extra>"))
+    fig.update_yaxes(title_text="buses per hour", rangemode="tozero")
+    fig.update_xaxes(title_text="hour the bus left JB checkpoint")
+    return base_layout(fig, 240)
 
 
 def heatmap_fig(ok, group, days):
@@ -291,6 +337,8 @@ def build(db_path, now):
     ok = trips[trips.ok]
     stats = T.slot_stats(ok[ok.day_type != "holiday"], by=("group", "day_type", "slot"))
     bridge = on_bridge(tracks, pd.Timestamp(now))
+    waits = berth_wait(trips)
+    deps = departures_per_hour(trips, runs)
     gap_today = bool(len(gaps)) and (gaps.gap_to.map(service_day) == today).any()
 
     body = []
@@ -316,6 +364,15 @@ def build(db_path, now):
         else:
             body.append(f'<h3>Best and worst times (06:00–23:00)</h3><p class="note">Needs hours with at least '
                         f"{MIN_TRIPS_PER_SLOT} trips.</p>")
+        body.append(f"<h3>{WAIT_TITLE}</h3>")
+        seen = ", ".join(x for x in GROUPS[group] if x in DWELL_SERVICES)
+        hidden = ", ".join(x for x in GROUPS[group] if x not in DWELL_SERVICES)
+        note = f"How long a bus sits at the berth before it leaves (bus {seen} only" +             (f"; {hidden} can't be seen while waiting)" if hidden else ")") +             ". You wait on board for up to this long. LTA's \"due now\" isn't meaningful here: a bus is almost always loading."
+        body.append(f'<p class="note">{note}</p>')
+        body.append(fig_html(profile_fig(ok.iloc[0:0], waits, group, today, ytitle="bus waits (min)", height=280)))
+        body.append('<p class="note">Buses seen leaving the berth per hour, averaged over the days in the window. '
+                    "A lower bound: buses without GPS when they leave aren't counted.</p>")
+        body.append(fig_html(departures_fig(deps, group)))
     body.append(f"<h2>Data quality</h2><div class='scroll'>{table_html(quality(runs, trips, days))}</div>")
     return page("\n".join(body), f"{day_label(days[-1])} – {day_label(days[0])} · updated {now:%H:%M}")
 

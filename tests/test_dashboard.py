@@ -32,7 +32,7 @@ def test_smoke(tmp_path):
     fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical", "On the bridge now",
-                 "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality"):
+                 "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality", D.WAIT_TITLE):
         assert text in html, text
     assert "No data yet" not in html
 
@@ -81,6 +81,30 @@ def test_best_worst():
     assert wk[wk.kind == "worst"].slot.tolist() == ["22:00", "21:00", "20:00"]
     few = D.best_worst(stats[stats.slot.isin(["08:00", "09:00", "10:00"])], "160/170/170X")
     assert few[few.kind == "best"].slot.tolist() == ["08:00"] and few[few.kind == "worst"].slot.tolist() == ["10:00"]
+
+
+def test_berth_wait_uses_only_services_with_gps_while_waiting():
+    # 170 has GPS while it waits at 46219; 160/170X only switch it on when they leave, so their "wait" is ignored
+    rows = [{"service": svc, "service_day": DAY, "left_a": pd.Timestamp(f"{DAY} 17:{10 + i}"), "wait_min": w,
+             "ride_min": 10, "ok": True, "day_type": "weekday"}
+            for i, (svc, w) in enumerate((("170", 20), ("170", 22), ("170", 24), ("170X", 1), ("160", 2)))]
+    s = D.berth_wait(pd.DataFrame(rows))
+    r = s[(s.group == "160/170/170X") & (s.slot == "17:00")].iloc[0]
+    assert (r.n, r["median"]) == (3, 22)
+
+
+def test_departures_per_hour():
+    # Fri 9 Oct: 4 departures at 08:xx, 1 at 09:xx; Mon 12 Oct: 2 at 08:xx, none at 09:xx -> weekday 08:00 = 3/h,
+    # 09:00 = 0.5/h. Thu 8 Oct was polled only at 01:xx, so it doesn't dilute the 08:00 and 09:00 averages.
+    rows = [{"service": "170", "service_day": d, "left_a": pd.Timestamp(f"{d} {t}"), "ok": True}
+            for d, t in ((DAY, "08:05"), (DAY, "08:20"), (DAY, "08:35"), (DAY, "08:50"),
+                         ("2026-10-12", "08:10"), ("2026-10-12", "08:40"), (DAY, "09:10"))]
+    runs = pd.DataFrame([{"polled_at": f"{d} {h}:{m:02d}:01", "stop": "46219", "ok": 1}
+                         for d, hours in ((DAY, ("08", "09")), ("2026-10-12", ("08", "09")), ("2026-10-09", ("01",)))
+                         for h in hours for m in range(0, 60, 10)])
+    d = D.departures_per_hour(pd.DataFrame(rows), runs).set_index(["group", "day_type", "slot"])
+    assert d.loc[("160/170/170X", "weekday", "08:00"), "per_hour"] == 3
+    assert d.loc[("160/170/170X", "weekday", "09:00"), "per_hour"] == 0.5
 
 
 def test_service_day_labels():
