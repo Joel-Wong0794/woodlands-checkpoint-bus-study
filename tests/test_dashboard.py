@@ -31,7 +31,7 @@ def test_smoke(tmp_path):
              + random_buses(25, service="950", first="2026-10-08 06:00", headway=(40, 70), seed=2))
     fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
-    for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical", "On the bridge now", "Data health",
+    for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical", "On the bridge now",
                  "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality"):
         assert text in html, text
     assert "No data yet" not in html

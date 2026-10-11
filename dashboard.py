@@ -293,11 +293,7 @@ def build(db_path, now):
     bridge = on_bridge(tracks, pd.Timestamp(now))
     gap_today = bool(len(gaps)) and (gaps.gap_to.map(service_day) == today).any()
 
-    last_poll = pd.to_datetime(runs.polled_at).max()
-    age = (pd.Timestamp(now) - last_poll).total_seconds() / 60
-    kept = f"{trips.ok.mean():.0%}" if len(trips) else "—"
-    body = ['<div class="tiles">' + tile_html("Data health", f"{age:.0f} min",
-            f"since the last poll · {kept} of trips kept · {len(gaps)} polling gaps") + "</div>"]
+    body = []
     for group in GROUPS:
         body.append(f"<h2>{group_name(group)}</h2>")
         if ok[ok.group == group].empty:
