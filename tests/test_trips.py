@@ -131,6 +131,18 @@ def test_polling_gap_drops_only_that_trip():
     assert trips[~trips.ok].iloc[0].reason == "polling gap"
 
 
+def test_other_stops_are_ignored():
+    """The collector also polls 46101/46211 (SG -> JB). Their rows must not add points or gaps to JB -> SG trips."""
+    b = bus("10:00", "10:02", "10:20")
+    runs, polls = simulate([b], f"{DAY} 09:30", f"{DAY} 11:00")
+    # the same bus listed at an SG -> JB stop, ~300 m away, and a 46101 polling gap in the middle of the ride
+    extra = [{**r, "stop": "46101", "lat": r["lat"] - 0.003} for r in polls if r["stop"] == "46109"]
+    extra_runs = [{**r, "stop": "46101"} for r in runs if r["stop"] == "46109" and not "10:05" <= r["polled_at"][11:16] <= "10:12"]
+    trips = measure_trips(runs + extra_runs, polls + extra, services=("170",))
+    assert trips.ok.sum() == 1 and matches(trips[trips.ok].iloc[0], b)
+    assert set(gps_points(polls + extra, ("170",)).index) == set(gps_points(polls, ("170",)).index)
+
+
 def test_poll_gaps():
     runs = [{"polled_at": f"{DAY} 10:0{m}:01", "stop": "46219", "ok": 1} for m in (0, 1, 5, 6)]
     runs.append({"polled_at": f"{DAY} 10:02:01", "stop": "46219", "ok": 0})  # a failed call doesn't fill a gap

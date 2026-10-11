@@ -38,7 +38,8 @@ def to_frame(rows, cols):
 def gps_points(polls, services=SERVICES):
     """One row per bus per minute, with its distance to each stop and whether it is 'at' a stop."""
     df = to_frame(polls, ["polled_at", "stop", "service", "lat", "lon"])
-    df = df[df.service.isin(services) & df.lat.notna() & df.lon.notna()].copy()
+    # only this direction's stops: the collector also polls the SG -> JB stops
+    df = df[df.stop.isin([STOP_A, STOP_B]) & df.service.isin(services) & df.lat.notna() & df.lon.notna()].copy()
     if df.empty:
         return pd.DataFrame(columns=POINT_COLS)
     df["t"] = pd.to_datetime(df.polled_at)
@@ -144,7 +145,7 @@ def find_trips(tracks):
 def poll_gaps(poll_runs):
     """Stretches where consecutive successful polls of a stop are more than GAP_SEC apart."""
     runs = to_frame(poll_runs, ["polled_at", "stop", "ok"])
-    runs = runs[runs.ok == 1].copy()
+    runs = runs[(runs.ok == 1) & runs.stop.isin([STOP_A, STOP_B])].copy()
     runs["t"] = pd.to_datetime(runs.polled_at)
     rows = []
     for stop, g in runs.sort_values("t").groupby("stop"):

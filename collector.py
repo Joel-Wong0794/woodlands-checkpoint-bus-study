@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from config import COLLECT_SERVICES, STOP_A, STOP_B
+from config import COLLECT_SERVICES, COLLECT_STOPS
 
 URL = "https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival"
 SGT = ZoneInfo("Asia/Singapore")
@@ -141,7 +141,7 @@ def main():
         return 1
     started = datetime.now(SGT).strftime(TIME_FMT)
     con = open_db()
-    results = [poll_stop(con, stop, key) for stop in (STOP_A, STOP_B)]
+    results = [poll_stop(con, stop, key) for stop in COLLECT_STOPS]
     con.close()
     print(started, " | ".join(text for text, _ in results), flush=True)
     return 0 if all(ok for _, ok in results) else 1

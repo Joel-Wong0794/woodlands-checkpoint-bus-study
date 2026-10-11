@@ -3,6 +3,11 @@
 STOP_A = "46219"  # JB Checkpoint (start)
 STOP_B = "46109"  # Woodlands Checkpoint (end)
 
+# SG -> JB direction (collected from 11 Oct 2026, analysed later): all 4 services go 46101 -> 46211 (LTA BusRoutes).
+STOP_SG = "46101"  # W'lands Checkpt, departure side (board after Singapore exit immigration)
+STOP_JB = "46211"  # Johor Bahru Checkpt, arrival side (alight for Malaysian immigration)
+COLLECT_STOPS = (STOP_A, STOP_B, STOP_SG, STOP_JB)
+
 # The collector stores all 4, so a later design can still use 160 and 170X.
 COLLECT_SERVICES = ("160", "170", "170X", "950")
 
@@ -14,9 +19,13 @@ SERVICES = ("160", "170", "170X", "950")
 GROUPS = {"160/170/170X": ("160", "170", "170X"), "950": ("950",)}
 
 # Copied from probe.py check 4 (LTA BusStops). Don't guess: {stop: (lat, lon)}
+# 46219/46109 from 8 Oct. LTA's BusStops showed them ~150-190 m away on 11 Oct; kept as is, because the JB -> SG
+# zones (ZONE_*, GATE_A_LAT) were tuned to real bus GPS fixes around these points.
 STOP_COORDS = {
     "46219": (1.465427, 103.768267),  # Johor Bahru Checkpt
     "46109": (1.446941, 103.769253),  # W'lands Checkpt
+    "46101": (1.446160, 103.768541),  # W'lands Checkpt (11 Oct)
+    "46211": (1.465696, 103.767509),  # Johor Bahru Checkpt (11 Oct)
 }
 
 GAP_SEC = 180              # polls further apart than this are a gap
