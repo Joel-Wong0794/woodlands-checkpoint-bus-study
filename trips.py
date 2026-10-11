@@ -44,20 +44,18 @@ def gps_points(polls, services=SERVICES):
     df["t"] = pd.to_datetime(df.polled_at)
     df["minute"] = df.t.dt.floor("min")
     df = df.drop_duplicates(["minute", "service", "stop", "lat", "lon"])
-    keep = []
-    for _, g in df.groupby(["minute", "service"]):
-        a, b = g[g.stop == STOP_A], g[g.stop == STOP_B]
-        keep.extend(a.index)
-        # a bus appears at most once per list, so match 46109 rows to 46219 rows one-to-one, closest first
-        pairs = sorted((float(metres(ra.lat, ra.lon, rb.lat, rb.lon)), ia, ib)
-                       for ia, ra in a.iterrows() for ib, rb in b.iterrows())
-        used_a, dup_b = set(), set()
-        for d, ia, ib in pairs:
-            if d <= DUP_M and ia not in used_a and ib not in dup_b:
-                used_a.add(ia)
-                dup_b.add(ib)
-        keep.extend(i for i in b.index if i not in dup_b)
-    df = df.loc[sorted(keep)]
+    # A bus appears at most once per list, so match 46109 rows to 46219 rows one-to-one, closest first,
+    # and drop the matched 46109 rows. Only pairs within DUP_M can match, so find those first (vectorised).
+    a = df[df.stop == STOP_A].reset_index()
+    b = df[df.stop == STOP_B].reset_index()
+    pairs = a.merge(b, on=["minute", "service"], suffixes=("_a", "_b"))
+    pairs["d"] = metres(pairs.lat_a.values, pairs.lon_a.values, pairs.lat_b.values, pairs.lon_b.values)
+    used_a, dup_b = set(), set()
+    for ia, ib in pairs[pairs.d <= DUP_M].sort_values("d")[["index_a", "index_b"]].itertuples(index=False):
+        if ia not in used_a and ib not in dup_b:
+            used_a.add(ia)
+            dup_b.add(ib)
+    df = df.drop(index=list(dup_b)).sort_index()
     df["dist_a"] = metres(*STOP_COORDS[STOP_A], df.lat, df.lon)
     df["dist_b"] = metres(*STOP_COORDS[STOP_B], df.lat, df.lon)
     df["at_a"] = (df.dist_a <= ZONE_A_M) & (df.lat >= GATE_A_LAT)
