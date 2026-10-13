@@ -35,6 +35,60 @@ BUS_ORDER = ("160/170/170X", "950")  # bus toggle order; the first is the defaul
 CAMERA_API = "https://api.data.gov.sg/v1/transport/traffic-images"
 CAMERAS = (("2701", "View from Woodlands Causeway (Towards Johor)"),
            ("2702", "View from Woodlands Checkpoint (Towards BKE)"))
+
+# Pop-up viewer for a camera image: zoom (buttons, pinch, wheel, double-tap) and drag to pan, without leaving the page.
+# Plain strings (not f-strings), so the JavaScript needs no doubled braces.
+LIGHTBOX_HTML = """<dialog class="lb" aria-label="Camera image">
+<div class="cap"></div><button type="button" class="close" aria-label="Close">✕</button>
+<div class="stage"><img alt=""></div>
+<div class="tools"><button type="button" data-zoom="out" aria-label="Zoom out">－</button>
+<button type="button" data-zoom="reset">Reset</button>
+<button type="button" data-zoom="in" aria-label="Zoom in">＋</button></div>
+</dialog>"""
+LIGHTBOX_JS = """
+const lb = document.querySelector("dialog.lb");
+if (lb) {
+  const img = lb.querySelector("img"), stage = lb.querySelector(".stage");
+  let s = 1, tx = 0, ty = 0, startDist = 0, startS = 1, last = null;
+  const pts = new Map();
+  const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`; };
+  const zoomTo = z => { s = Math.min(6, Math.max(1, z)); if (s === 1) { tx = 0; ty = 0; } apply(); };
+  document.querySelectorAll(".camopen").forEach(b => b.addEventListener("click", () => {
+    const src = b.querySelector("img").getAttribute("src");
+    if (!src) return;  // not loaded yet
+    img.src = src;
+    img.alt = b.querySelector("img").alt;
+    lb.querySelector(".cap").textContent = b.closest(".cam").querySelector("figcaption").textContent;
+    zoomTo(1);
+    lb.showModal();
+  }));
+  lb.querySelector(".close").addEventListener("click", () => lb.close());
+  lb.addEventListener("click", e => { if (e.target === lb || (e.target === stage && s === 1)) lb.close(); });
+  lb.querySelector(".tools").addEventListener("click", e => {
+    const z = e.target.dataset.zoom;
+    if (z) zoomTo(z === "in" ? s * 1.5 : z === "out" ? s / 1.5 : 1);
+  });
+  img.addEventListener("dblclick", () => zoomTo(s > 1 ? 1 : 2.5));
+  stage.addEventListener("wheel", e => { e.preventDefault(); zoomTo(s * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); },
+                         {passive: false});
+  // one finger / mouse drags; two fingers pinch
+  stage.addEventListener("pointerdown", e => { pts.set(e.pointerId, e); stage.setPointerCapture(e.pointerId);
+    last = {x: e.clientX, y: e.clientY};
+    if (pts.size === 2) { const [a, b] = [...pts.values()];
+      startDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); startS = s; } });
+  stage.addEventListener("pointermove", e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, e);
+    if (pts.size === 2) { const [a, b] = [...pts.values()];
+      zoomTo(startS * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / startDist); }
+    else if (s > 1 && last) { tx += e.clientX - last.x; ty += e.clientY - last.y; apply(); }
+    last = {x: e.clientX, y: e.clientY};
+  });
+  const up = e => { pts.delete(e.pointerId); last = null; };
+  stage.addEventListener("pointerup", up);
+  stage.addEventListener("pointercancel", up);
+}
+"""
 # Services with GPS while they wait at the boarding berth. At JB (9-11 Oct data) 160 and 170X only switch it on
 # when they leave, so their measured "wait" is just the last minute or two and is left out. At Woodlands all four
 # report while waiting (12-13 Oct: median waits 8-13 min for every service).
@@ -386,6 +440,18 @@ details {{ margin:28px 0 8px; }} summary {{ font-weight:600; cursor:pointer; }}
 .cams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:8px 0 0; }}
 .cam {{ margin:0; }} .cam img {{ width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:8px; background:var(--tile); display:block; }}
 .cam figcaption {{ font-size:12px; color:var(--ink2); margin-top:4px; }}
+.camopen {{ display:block; width:100%; padding:0; border:0; background:none; cursor:zoom-in; }}
+dialog.lb {{ border:0; padding:0; margin:0; width:100vw; height:100vh; max-width:100vw; max-height:100vh;
+  background:#0b0b0b; color:#fff; overflow:hidden; }}
+dialog.lb::backdrop {{ background:rgba(0,0,0,.6); }}
+.lb .stage {{ position:absolute; inset:44px 0 60px 0; display:flex; align-items:center; justify-content:center;
+  overflow:hidden; touch-action:none; }}
+.lb .stage img {{ max-width:100%; max-height:100%; user-select:none; -webkit-user-drag:none; cursor:grab; }}
+.lb .cap {{ position:absolute; top:12px; left:12px; right:60px; font-size:13px; }}
+.lb .close {{ position:absolute; top:4px; right:8px; }}
+.lb .tools {{ position:absolute; left:0; right:0; bottom:8px; display:flex; gap:8px; justify-content:center; }}
+.lb button {{ min-width:48px; min-height:44px; border-radius:8px; border:1px solid #555; background:#222; color:#fff;
+  font:inherit; font-size:16px; cursor:pointer; }}
 .dirs button {{ flex:1; min-height:48px; border:1px solid var(--line); border-radius:10px; background:var(--tile);
   color:var(--ink); font:inherit; font-size:15px; cursor:pointer; }}
 .dirs button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
@@ -485,12 +551,13 @@ async function loadCams() {{
     const c = cams.find(x => x.camera_id === box.dataset.cam), when = box.querySelector(".when");
     if (!c) {{ when.textContent = "not available right now"; return; }}
     const img = box.querySelector("img");
-    if (img.getAttribute("src") !== c.image) {{ img.src = c.image; box.querySelector("a").href = c.image; }}
+    if (img.getAttribute("src") !== c.image) img.src = c.image;
     when.textContent = "taken " + c.timestamp.slice(11, 16);
   }});
 }}
 loadCams();
 setInterval(loadCams, 60000);
+{LIGHTBOX_JS}
 </script></body></html>"""
 
 
@@ -601,10 +668,10 @@ def build(db_path, now):
                       for g in BUS_ORDER)
             + "</div></div>"]
     body.append("<h2>Live cameras</h2><div class=\"cams\">"
-                + "".join(f'<figure class="cam" id="cam-{cid}" data-cam="{cid}"><a target="_blank" rel="noopener">'
-                          f'<img alt="{name}"></a><figcaption>{name} · <span class="when">loading…</span>'
-                          "</figcaption></figure>" for cid, name in CAMERAS)
-                + '</div><p class="note">Cameras: LTA, via data.gov.sg</p>')
+                + "".join(f'<figure class="cam" id="cam-{cid}" data-cam="{cid}"><button type="button" class="camopen" '
+                          f'aria-label="Enlarge: {name}"><img alt="{name}"></button><figcaption>{name} · '
+                          '<span class="when">loading…</span></figcaption></figure>' for cid, name in CAMERAS)
+                + '</div><p class="note">Cameras: LTA, via data.gov.sg · tap to enlarge</p>' + LIGHTBOX_HTML)
     for direction, title in PAGES:
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
         body.append(plan_html(plan, plan_dates, direction, weekday))

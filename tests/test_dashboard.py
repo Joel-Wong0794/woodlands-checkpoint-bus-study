@@ -97,6 +97,9 @@ def test_live_cameras(tmp_path):
     assert 'id="cam-2701"' in html and 'id="cam-2702"' in html
     assert D.CAMERA_API in html  # the page fetches the latest images itself
     assert "data.gov.sg" in html  # attribution
+    # tapping an image opens it in a pop-up viewer on the page (zoom, pan, close), not a new page
+    assert '<dialog class="lb"' in html and "showModal" in html
+    assert 'target="_blank"' not in html
 
 
 def test_browser_picks_today_and_marks_now(tmp_path):
