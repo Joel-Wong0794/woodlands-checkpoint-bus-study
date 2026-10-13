@@ -409,7 +409,7 @@ dialog.lb::backdrop {{ background:transparent; }}
 {body}
 <p class="note"><b>How it's measured:</b> every minute, LTA's live GPS positions of buses 160, 170, 170X and 950
 are recorded, and each bus is timed from its last position at the boarding checkpoint to its first at the other
-checkpoint. It covers the bus ride only; immigration queues aren't included.</p>
+checkpoint.</p>
 </main><script>
 const SWAP = {json.dumps(swap)};
 const orig = new Map();
