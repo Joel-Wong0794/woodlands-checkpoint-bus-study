@@ -30,6 +30,11 @@ WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 PAGES = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # one page each, in day-trip order
 BERTH = {"jb-sg": "JB", "sg-jb": "Woodlands"}  # where you board
 BUS_ORDER = ("950", "160/170/170X")  # bus toggle order; the first is the default
+# LTA traffic cameras via data.gov.sg (camera ids checked against the images on 13 Oct 2026). The page fetches the
+# latest images itself, in the viewer's browser (the API allows that), every minute while it is open.
+CAMERA_API = "https://api.data.gov.sg/v1/transport/traffic-images"
+CAMERAS = (("2701", "View from Woodlands Causeway (Towards Johor)"),
+           ("2702", "View from Woodlands Checkpoint (Towards BKE)"))
 # Services with GPS while they wait at the boarding berth. At JB (9-11 Oct data) 160 and 170X only switch it on
 # when they leave, so their measured "wait" is just the last minute or two and is left out. At Woodlands all four
 # report while waiting (12-13 Oct: median waits 8-13 min for every service).
@@ -378,6 +383,9 @@ h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h
   color:var(--ink); font:inherit; cursor:pointer; }}
 .grps button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
 details {{ margin:28px 0 8px; }} summary {{ font-weight:600; cursor:pointer; }}
+.cams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:8px 0 0; }}
+.cam {{ margin:0; }} .cam img {{ width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:8px; background:var(--tile); display:block; }}
+.cam figcaption {{ font-size:12px; color:var(--ink2); margin-top:4px; }}
 .dirs button {{ flex:1; min-height:48px; border:1px solid var(--line); border-radius:10px; background:var(--tile);
   color:var(--ink); font:inherit; font-size:15px; cursor:pointer; }}
 .dirs button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
@@ -442,6 +450,22 @@ const dirBar = document.querySelector(".dirs"), dayBar = document.querySelector(
 if (dirBar) showDir(first("dir", dirBar.dataset.default));
 if (dayBar) showDay(first("day", dayBar.dataset.default));
 if (grpBar) showGrp(first("grp", grpBar.dataset.default));
+// live traffic cameras: the latest image of each, refreshed every minute while the page is open
+async function loadCams() {{
+  const boxes = document.querySelectorAll(".cam");
+  if (!boxes.length) return;
+  let cams = [];
+  try {{ cams = (await (await fetch("{CAMERA_API}", {{cache: "no-store"}})).json()).items[0].cameras; }} catch (e) {{}}
+  boxes.forEach(box => {{
+    const c = cams.find(x => x.camera_id === box.dataset.cam), when = box.querySelector(".when");
+    if (!c) {{ when.textContent = "not available right now"; return; }}
+    const img = box.querySelector("img");
+    if (img.getAttribute("src") !== c.image) {{ img.src = c.image; box.querySelector("a").href = c.image; }}
+    when.textContent = "taken " + c.timestamp.slice(11, 16);
+  }});
+}}
+loadCams();
+setInterval(loadCams, 60000);
 </script></body></html>"""
 
 
@@ -551,6 +575,11 @@ def build(db_path, now):
             + "".join(f'<button type="button" data-grp="{group_key(g)}" aria-pressed="false">{group_name(g)}</button>'
                       for g in BUS_ORDER)
             + "</div></div>"]
+    body.append("<h2>Live cameras</h2><div class=\"cams\">"
+                + "".join(f'<figure class="cam" id="cam-{cid}" data-cam="{cid}"><a target="_blank" rel="noopener">'
+                          f'<img alt="{name}"></a><figcaption>{name} · <span class="when">loading…</span>'
+                          "</figcaption></figure>" for cid, name in CAMERAS)
+                + '</div><p class="note">Cameras: LTA, via data.gov.sg</p>')
     for direction, title in PAGES:
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
         body.append(plan_html(plan, plan_dates, direction, weekday))

@@ -87,6 +87,17 @@ def test_bus_toggle_defaults_to_950(tmp_path):
     assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') > 2
 
 
+def test_live_cameras(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(5, service="170", first=f"{DAY} 06:00", seed=7), f"{DAY} 05:30", f"{DAY} 09:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 09:00:30"))
+    assert "View from Woodlands Causeway (Towards Johor)" in html     # camera 2701
+    assert "View from Woodlands Checkpoint (Towards BKE)" in html      # camera 2702
+    assert 'id="cam-2701"' in html and 'id="cam-2702"' in html
+    assert D.CAMERA_API in html  # the page fetches the latest images itself
+    assert "data.gov.sg" in html  # attribution
+
+
 def test_empty_db(tmp_path):
     db = tmp_path / "causeway.db"
     open_db(db).close()
