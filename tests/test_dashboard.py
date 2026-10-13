@@ -32,7 +32,8 @@ def test_smoke(tmp_path):
     fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical", "On the bridge now",
-                 "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality", D.WAIT_TITLE):
+                 "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality",
+                 "Waiting at the JB berth"):
         assert text in html, text
     assert "No data yet" not in html
 
@@ -59,6 +60,19 @@ def test_plan_stats_counts_days_per_weekday_and_direction():
     s = stats.set_index(["direction", "weekday", "group", "slot"])
     assert s.loc[("jb-sg", "Fri", "160/170/170X", "09:00"), "n"] == 6
     assert s.loc[("sg-jb", "Fri", "160/170/170X", "09:00"), "median"] == 11
+
+
+def test_one_page_per_direction(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(20, service="170", first=f"{DAY} 06:00", headway=(10, 20), seed=4),
+            f"{DAY} 05:30", f"{DAY} 18:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
+    assert '<div class="dirs" data-default="sg-jb">' in html  # opens on "Going to JB"
+    assert html.count('<section class="dirpage"') == 2
+    assert 'data-dir="sg-jb"' in html and 'data-dir="jb-sg"' in html
+    assert html.count(f"<h2>{D.PLAN_TITLE}</h2>") == 2  # each page has its own Plan your day
+    jb_sg = html[html.index('<section class="dirpage" data-dir="jb-sg"'):]
+    assert "Bus 160 / 170 / 170X · JB → Singapore" in jb_sg  # details sit on their direction's page
 
 
 def test_empty_db(tmp_path):
@@ -93,6 +107,18 @@ def test_on_bridge_ignores_fixes_after_now():
     _, polls = simulate([bus("10:00", "10:02", "10:20"), bus("10:30", "10:32", "10:50")], f"{DAY} 09:50", f"{DAY} 11:00")
     b = D.on_bridge(link_tracks(gps_points(polls, ("170",))), datetime.fromisoformat(f"{DAY} 10:10"))
     assert len(b) == 1 and 7 <= b.elapsed_min.iloc[0] <= 9.5
+
+
+def test_on_bridge_only_counts_buses_on_the_causeway():
+    # real 13 Oct case: a track passed the Woodlands boarding area, then its latest fixes are ~1 km south, in Singapore
+    t0 = pd.Timestamp(f"{DAY} 09:30")
+    def fixes(track, lats):
+        return [{"t": t0 + pd.Timedelta(minutes=i), "service": "170X", "track": track, "lat": la,
+                 "at_a": i == 0, "at_b": False} for i, la in enumerate(lats)]
+    tracks = pd.DataFrame(fixes("in-sg", [1.4462, 1.4440, 1.4380, 1.4378])     # left the area, went south
+                          + fixes("on-bridge", [1.4462, 1.4490, 1.4530, 1.4570]))  # left the area, crossing north
+    b = D.on_bridge(tracks, t0 + pd.Timedelta(minutes=4))
+    assert b.track.tolist() == ["on-bridge"]
 
 
 def test_best_worst():

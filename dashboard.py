@@ -13,8 +13,8 @@ import pandas as pd
 import plotly.graph_objects as go
 
 import trips as T
-from config import (COLLECT_STOPS, DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
-                    SERVICE_DAY_START_HOUR, SLOT_MIN, STOP_A)
+from config import (CAUSEWAY_LAT, COLLECT_STOPS, DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
+                    SERVICE_DAY_START_HOUR, SLOT_MIN)
 
 ROOT = Path(__file__).parent
 DB_PATH = ROOT / "data" / "causeway.db"
@@ -23,13 +23,14 @@ SGT = ZoneInfo("Asia/Singapore")
 
 PROFILE_TITLE = "Ride time through the day"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
-WAIT_TITLE = "Waiting at the JB berth"
 PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-LEGS = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # the order of a day trip
-# Services with GPS while they wait at 46219 (9-11 Oct data). 160 and 170X only switch it on when they leave,
-# so their measured "wait" is just the last minute or two and is left out.
-DWELL_SERVICES = ("170", "950")
+PAGES = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # one page each, in day-trip order
+BERTH = {"jb-sg": "JB", "sg-jb": "Woodlands"}  # where you board
+# Services with GPS while they wait at the boarding berth. At JB (9-11 Oct data) 160 and 170X only switch it on
+# when they leave, so their measured "wait" is just the last minute or two and is left out. At Woodlands all four
+# report while waiting (12-13 Oct: median waits 8-13 min for every service).
+DWELL_SERVICES = {"jb-sg": ("170", "950"), "sg-jb": ("160", "170", "170X", "950")}
 FRESH_MIN = 5        # a bus counts as "on the bridge now" only if its last GPS fix is this recent
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
@@ -80,7 +81,9 @@ def group_name(group):
 # ---------- Pure calculations ----------
 
 def on_bridge(tracks, now):
-    """Buses that left the JB checkpoint and haven't reached 46109, with a GPS fix in the last FRESH_MIN."""
+    """Buses that left the boarding stop and haven't reached the alighting stop, whose latest GPS fix is on the
+    Causeway and less than FRESH_MIN old. (A track that passed the boarding area and then went elsewhere, e.g.
+    back into Singapore, is not on the bridge.)"""
     cols = ["group", "service", "track", "left_a", "elapsed_min"]
     rows = []
     for tid, g in tracks[tracks.t <= now].sort_values("t").groupby("track"):
@@ -90,6 +93,8 @@ def on_bridge(tracks, now):
         left = at_a.t.max()
         after = g[g.t > left]
         if after.empty or after.at_b.any() or (now - after.t.max()).total_seconds() > FRESH_MIN * 60:
+            continue
+        if not CAUSEWAY_LAT[0] <= after.lat.iloc[-1] < CAUSEWAY_LAT[1]:
             continue
         elapsed = (now - left).total_seconds() / 60
         if elapsed <= MAX_TRIP_MIN:
@@ -113,13 +118,13 @@ def best_worst(stats, group, n=3):
     return pd.concat(rows)[cols].reset_index(drop=True) if rows else pd.DataFrame(columns=cols)
 
 
-def berth_wait(trips):
-    """How long buses sit at the JB berth before leaving: median etc. per group, day type and slot."""
-    t = trips[trips.ok.astype(bool) & trips.service.isin(DWELL_SERVICES)]
+def berth_wait(trips, direction="jb-sg"):
+    """How long buses sit at the boarding berth before leaving: median etc. per group, day type and slot."""
+    t = trips[trips.ok.astype(bool) & trips.service.isin(DWELL_SERVICES[direction])]
     return T.slot_stats(t.assign(ride_min=t.wait_min), by=("group", "day_type", "slot"))
 
 
-def departures_per_hour(trips, runs):
+def departures_per_hour(trips, runs, direction="jb-sg"):
     """Average buses seen leaving the berth per hour, per group, day type and slot (a lower bound).
 
     Averaged only over days that were polled in that slot, so a partial first day or today's
@@ -129,7 +134,7 @@ def departures_per_hour(trips, runs):
     d = T.departures_seen(trips)
     if d.empty:
         return pd.DataFrame(columns=cols)
-    polled = runs[(runs.ok == 1) & (runs.stop == STOP_A)]
+    polled = runs[(runs.ok == 1) & (runs.stop == DIRECTIONS[direction]["board"])]
     t = pd.to_datetime(polled.polled_at)
     cov = pd.DataFrame({"service_day": t.map(service_day), "slot": t.dt.floor(f"{SLOT_MIN}min").dt.strftime("%H:%M")})
     cov = cov.drop_duplicates().assign(day_type=lambda c: c.service_day.map(day_type))
@@ -219,7 +224,7 @@ def base_layout(fig, height):
     return fig
 
 
-def profile_fig(ok, stats, group, today, ytitle="ride (min)", height=340):
+def profile_fig(ok, stats, group, today, ytitle="ride (min)", height=340, direction="jb-sg"):
     fig = go.Figure()
     for dtype in ("weekday", "weekend"):
         s = stats[(stats.group == group) & (stats.day_type == dtype)].copy()
@@ -246,7 +251,7 @@ def profile_fig(ok, stats, group, today, ytitle="ride (min)", height=340):
                                  customdata=list(zip(t.service, t.left_a.dt.strftime("%H:%M"))),
                                  hovertemplate="bus %{customdata[0]} left %{customdata[1]}: %{y:.0f} min<extra></extra>"))
     fig.update_yaxes(title_text=ytitle, rangemode="tozero")
-    fig.update_xaxes(title_text="time the bus left JB checkpoint")
+    fig.update_xaxes(title_text=f"time the bus left the {BERTH[direction]} checkpoint")
     return base_layout(fig, height)
 
 
@@ -271,11 +276,11 @@ def plan_fig(stats, direction, weekday):
                                                "middle half %{customdata[1]:.0f}-%{customdata[2]:.0f}, "
                                                "%{customdata[3]} trips<extra></extra>"))
     fig.update_yaxes(title_text="ride (min)", rangemode="tozero")
-    fig.update_xaxes(title_text=f"time the bus left {DIRECTIONS[direction]['board']}")
+    fig.update_xaxes(title_text=f"time the bus left the {BERTH[direction]} checkpoint")
     return base_layout(fig, 300)
 
 
-def departures_fig(deps, group):
+def departures_fig(deps, group, direction="jb-sg"):
     fig = go.Figure()
     for i, dtype in enumerate(("weekday", "weekend")):
         d = deps[(deps.group == group) & (deps.day_type == dtype)]
@@ -286,11 +291,11 @@ def departures_fig(deps, group):
                              marker=dict(color=LIGHT[dtype]),
                              hovertemplate=f"{dtype} %{{x:.0f}}h: at least %{{y:.1f}} buses<extra></extra>"))
     fig.update_yaxes(title_text="buses per hour", rangemode="tozero")
-    fig.update_xaxes(title_text="hour the bus left JB checkpoint")
+    fig.update_xaxes(title_text=f"hour the bus left the {BERTH[direction]} checkpoint")
     return base_layout(fig, 240)
 
 
-def heatmap_fig(ok, group, days):
+def heatmap_fig(ok, group, days, direction="jb-sg"):
     t = ok[ok.group == group].assign(h=lambda d: hour_x(d.left_a).astype(int))
     agg = t.groupby(["service_day", "h"]).ride_min.agg(["median", "size"])
     z = [[agg["median"].get((d, h)) for h in HOURS] for d in days]
@@ -303,7 +308,7 @@ def heatmap_fig(ok, group, days):
                                              tickfont=dict(color=LIGHT["ink2"])),
                                hovertemplate="%{y} %{x:.0f}h: median %{z:.0f} min (%{customdata} trips)<extra></extra>"))
     fig.update_yaxes(autorange="reversed", showgrid=False)
-    fig.update_xaxes(showgrid=False, title_text="hour the bus left JB checkpoint")
+    fig.update_xaxes(showgrid=False, title_text=f"hour the bus left the {BERTH[direction]} checkpoint")
     return base_layout(fig, 90 + 24 * len(days))
 
 
@@ -339,6 +344,11 @@ h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h
 .lbl {{ font-size:12px; color:var(--ink2); }} .val {{ font-size:24px; font-weight:600; }} .note {{ font-size:12px; }}
 .scroll {{ overflow-x:auto; }} .tbl {{ border-collapse:collapse; font-size:13px; white-space:nowrap; }}
 .tbl th, .tbl td {{ border-bottom:1px solid var(--line); padding:4px 10px; text-align:left; }} .tbl th {{ color:var(--ink2); font-weight:600; }}
+.dirs {{ display:flex; gap:8px; margin:12px 0 4px; position:sticky; top:0; z-index:5; background:var(--surface); padding:6px 0; }}
+.dirs button {{ flex:1; min-height:48px; border:1px solid var(--line); border-radius:10px; background:var(--tile);
+  color:var(--ink); font:inherit; font-size:15px; cursor:pointer; }}
+.dirs button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
+.dirs small {{ display:block; font-size:12px; opacity:.8; font-weight:400; }}
 .days {{ display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }}
 .days button {{ min-width:52px; min-height:40px; border:1px solid var(--line); border-radius:8px; background:var(--tile);
   color:var(--ink); font:inherit; cursor:pointer; }}
@@ -371,20 +381,31 @@ function paint() {{
 }}
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paint);
 window.addEventListener("load", paint);
-function showDay(day) {{
-  document.querySelectorAll(".day").forEach(el => {{ el.hidden = el.dataset.day !== day; }});
-  document.querySelectorAll(".days button").forEach(b => b.setAttribute("aria-pressed", b.dataset.day === day));
-  try {{ localStorage.setItem("day", day); }} catch (e) {{}}
+// pick a page (direction) and a weekday; both are shared across pages, remembered, and can come from the link,
+// e.g. index.html#sg-jb,Sat
+function pick(sel, attr, value, key) {{
+  document.querySelectorAll(sel).forEach(el => {{ el.hidden = el.dataset[attr] !== value; }});
+  document.querySelectorAll(`button[data-${{attr}}]`).forEach(b => b.setAttribute("aria-pressed", b.dataset[attr] === value));
+  try {{ localStorage.setItem(key, value); }} catch (e) {{}}
   window.dispatchEvent(new Event("resize"));  // charts drawn while hidden need their width
 }}
-const dayBar = document.querySelector(".days");
-if (dayBar) {{
-  dayBar.addEventListener("click", e => {{ if (e.target.dataset.day) showDay(e.target.dataset.day); }});
-  const has = d => d && document.querySelector('.day[data-day="' + d + '"]');
-  let start = location.hash.slice(1);
-  if (!has(start)) {{ try {{ start = localStorage.getItem("day"); }} catch (e) {{ start = null; }} }}
-  showDay(has(start) ? start : dayBar.dataset.default);
+const showDir = d => pick(".dirpage", "dir", d, "dir");
+const showDay = d => pick(".day", "day", d, "day");
+document.addEventListener("click", e => {{
+  const b = e.target.closest("button");
+  if (b && b.dataset.dir) showDir(b.dataset.dir);
+  if (b && b.dataset.day) showDay(b.dataset.day);
+}});
+function first(attr, fallback) {{
+  const ok = v => v && document.querySelector(`[data-${{attr}}="${{v}}"]`);
+  const fromLink = location.hash.slice(1).split(",").find(ok);
+  let saved = null;
+  try {{ saved = localStorage.getItem(attr); }} catch (e) {{}}
+  return fromLink || (ok(saved) ? saved : fallback);
 }}
+const dirBar = document.querySelector(".dirs"), dayBar = document.querySelector(".days");
+if (dirBar) showDir(first("dir", dirBar.dataset.default));
+if (dayBar) showDay(first("day", dayBar.dataset.default));
 </script></body></html>"""
 
 
@@ -398,26 +419,24 @@ def load(db_path, since):
     return runs, polls
 
 
-def plan_html(stats, dates, default_day):
-    """The "Plan your day" section: Mon-Sun buttons, and per weekday a chart per leg of the day trip."""
+def plan_html(stats, dates, direction, default_day):
+    """The "Plan your day" section of one direction's page: Mon-Sun buttons, a chart per weekday."""
+    d = DIRECTIONS[direction]
     out = [f"<h2>{PLAN_TITLE}</h2>",
-           f'<p class="note">Pick a day. Lines: median ride by the hour the bus leaves (shaded: middle half of trips), '
-           f"from the last {PLAN_DAYS // 7} weeks of that weekday; hours with fewer than {MIN_TRIPS_PER_SLOT} trips "
-           "hidden. Bus ride only: immigration queues are not included.</p>",
+           f'<p class="note">{d["name"]}, bus stop {d["board"]} → {d["alight"]}. Pick a day. Lines: median ride by '
+           f"the hour the bus leaves (shaded: middle half of trips), from the last {PLAN_DAYS // 7} weeks of that "
+           f"weekday; hours with fewer than {MIN_TRIPS_PER_SLOT} trips hidden. Bus ride only: immigration queues are "
+           "not included.</p>",
            f'<div class="days" data-default="{default_day}">'
-           + "".join(f'<button type="button" data-day="{d}" aria-pressed="false">{d}</button>' for d in WEEKDAYS)
+           + "".join(f'<button type="button" data-day="{w}" aria-pressed="false">{w}</button>' for w in WEEKDAYS)
            + "</div>"]
     for day in WEEKDAYS:
-        out.append(f'<div class="day" data-day="{day}" hidden>')
-        for direction, leg in LEGS:
-            d = DIRECTIONS[direction]
-            used = dates.get((direction, day), [])
-            based = (f"{len(used)} {day} (" + ", ".join(day_label(x)[4:] for x in used) + ")") if used else f"no {day} yet"
-            out.append(f"<h3>{leg}: {d['name']} ({d['board']} → {d['alight']})</h3>"
-                       f'<p class="note">Based on {based}.</p>')
-            if stats[(stats.direction == direction) & (stats.weekday == day)].empty:
-                out.append(f'<p class="note">Not enough trips yet for a {day} chart.</p>')
-                continue
+        used = dates.get((direction, day), [])
+        based = (f"{len(used)} {day} (" + ", ".join(day_label(x)[4:] for x in used) + ")") if used else f"no {day} yet"
+        out.append(f'<div class="day" data-day="{day}" hidden><p class="note">Based on {based}.</p>')
+        if stats[(stats.direction == direction) & (stats.weekday == day)].empty:
+            out.append(f'<p class="note">Not enough trips yet for a {day} chart.</p>')
+        else:
             out.append(fig_html(plan_fig(stats, direction, day)))
             for group in GROUPS:
                 text = best_text(stats, direction, day, group)
@@ -425,6 +444,55 @@ def plan_html(stats, dates, default_day):
                     out.append(f'<p class="best"><b>{group_name(group)}</b> · {text}</p>')
         out.append("</div>")
     return "\n".join(out)
+
+
+def details_html(direction, tracks, all_trips, runs, days, now, today):
+    """The last DASH_DAYS of one direction, per group: tiles, profile, heatmap, best/worst, waiting at the berth."""
+    name, berth = DIRECTIONS[direction]["name"], BERTH[direction]
+    gaps = T.poll_gaps(runs, direction)
+    trips = all_trips[(all_trips.direction == direction) & all_trips.service_day.isin(days)].reset_index(drop=True)
+    ok = trips[trips.ok]
+    stats = T.slot_stats(ok[ok.day_type != "holiday"], by=("group", "day_type", "slot"))
+    bridge = on_bridge(tracks, pd.Timestamp(now))
+    waits = berth_wait(trips, direction)
+    deps = departures_per_hour(trips, runs, direction)
+    gap_today = bool(len(gaps)) and (gaps.gap_to.map(service_day) == today).any()
+    body = []
+    for group in GROUPS:
+        body.append(f"<h2>{group_name(group)} · {name}, last {len(days)} days</h2>")
+        if ok[ok.group == group].empty:
+            body.append('<p class="note">No trips measured yet for this group.</p>')
+            continue
+        tv = tiles(trips, stats, bridge, group, pd.Timestamp(now), gap_today)
+        body.append('<div class="tiles">' + "".join(tile_html(k, *v) for k, v in tv.items()) + "</div>")
+        body.append(f"<h3>{PROFILE_TITLE}</h3>"
+                    f'<p class="note">Lines: median per hour over the last {len(days)} days (shaded: middle half of '
+                    f"trips; hours with fewer than {MIN_TRIPS_PER_SLOT} trips hidden). Dots: today.</p>")
+        body.append(fig_html(profile_fig(ok, stats, group, today, direction=direction)))
+        body.append(f"<h3>{HEATMAP_TITLE}</h3>"
+                    '<p class="note">Median ride per day and hour. Darker = longer. Blank = no trip measured.</p>')
+        body.append(fig_html(heatmap_fig(ok, group, days, direction)))
+        bw = best_worst(stats, group)
+        if len(bw):
+            bw = bw.rename(columns={"day_type": "Day type", "kind": "", "slot": "Leaving", "median": "Median min",
+                                    "n": "Trips"})
+            body.append(f"<h3>Best and worst times (06:00–23:00)</h3><div class='scroll'>{table_html(bw)}</div>")
+        else:
+            body.append(f'<h3>Best and worst times (06:00–23:00)</h3><p class="note">Needs hours with at least '
+                        f"{MIN_TRIPS_PER_SLOT} trips.</p>")
+        seen = ", ".join(x for x in GROUPS[group] if x in DWELL_SERVICES[direction])
+        hidden = ", ".join(x for x in GROUPS[group] if x not in DWELL_SERVICES[direction])
+        note = (f"How long a bus sits at the berth before it leaves (bus {seen}"
+                + (f" only; {hidden} can't be seen while waiting)" if hidden else ")")
+                + ". You wait on board for up to this long.")
+        body.append(f'<h3>Waiting at the {berth} berth</h3><p class="note">{note}</p>')
+        if seen:
+            body.append(fig_html(profile_fig(ok.iloc[0:0], waits, group, today, ytitle="bus waits (min)",
+                                             height=280, direction=direction)))
+        body.append('<p class="note">Buses seen leaving the berth per hour, averaged over the days in the window. '
+                    "A lower bound: buses without GPS when they leave aren't counted.</p>")
+        body.append(fig_html(departures_fig(deps, group, direction)))
+    return "\n".join(body)
 
 
 def build(db_path, now):
@@ -438,55 +506,23 @@ def build(db_path, now):
     first = service_day(runs.polled_at.min())
     days = [d for d in plan_days[:DASH_DAYS] if d >= first]  # newest first
 
-    # both directions over the plan window; the detailed JB -> Singapore sections use the last DASH_DAYS
+    # both directions over the plan window; the detailed sections use the last DASH_DAYS
     all_tracks = {d: T.link_tracks(T.gps_points(polls, direction=d)) for d in DIRECTIONS}
     found = [T.check_trips(T.find_trips(all_tracks[d]), T.poll_gaps(runs, d), d) for d in DIRECTIONS]
     all_trips = pd.concat([f for f in found if len(f)] or found[:1], ignore_index=True)
     all_trips["day_type"] = all_trips.service_day.map(day_type)
     plan, plan_dates = plan_stats(all_trips)
 
-    tracks = all_tracks["jb-sg"]
-    gaps = T.poll_gaps(runs, "jb-sg")
-    trips = all_trips[(all_trips.direction == "jb-sg") & all_trips.service_day.isin(days)].reset_index(drop=True)
-    ok = trips[trips.ok]
-    stats = T.slot_stats(ok[ok.day_type != "holiday"], by=("group", "day_type", "slot"))
-    bridge = on_bridge(tracks, pd.Timestamp(now))
-    waits = berth_wait(trips)
-    deps = departures_per_hour(trips, runs)
-    gap_today = bool(len(gaps)) and (gaps.gap_to.map(service_day) == today).any()
-
-    body = [plan_html(plan, plan_dates, pd.Timestamp(today).strftime("%a"))]
-    for group in GROUPS:
-        body.append(f"<h2>{group_name(group)} · JB → Singapore, last {len(days)} days</h2>")
-        if ok[ok.group == group].empty:
-            body.append('<p class="note">No trips measured yet for this group.</p>')
-            continue
-        tv = tiles(trips, stats, bridge, group, pd.Timestamp(now), gap_today)
-        body.append('<div class="tiles">' + "".join(tile_html(k, *v) for k, v in tv.items()) + "</div>")
-        body.append(f"<h3>{PROFILE_TITLE}</h3>"
-                    f'<p class="note">Lines: median per hour over the last {len(days)} days (shaded: middle half of '
-                    f"trips; hours with fewer than {MIN_TRIPS_PER_SLOT} trips hidden). Dots: today.</p>")
-        body.append(fig_html(profile_fig(ok, stats, group, today)))
-        body.append(f"<h3>{HEATMAP_TITLE}</h3>"
-                    '<p class="note">Median ride per day and hour. Darker = longer. Blank = no trip measured.</p>')
-        body.append(fig_html(heatmap_fig(ok, group, days)))
-        bw = best_worst(stats, group)
-        if len(bw):
-            bw = bw.rename(columns={"day_type": "Day type", "kind": "", "slot": "Leaving", "median": "Median min",
-                                    "n": "Trips"})
-            body.append(f"<h3>Best and worst times (06:00–23:00)</h3><div class='scroll'>{table_html(bw)}</div>")
-        else:
-            body.append(f'<h3>Best and worst times (06:00–23:00)</h3><p class="note">Needs hours with at least '
-                        f"{MIN_TRIPS_PER_SLOT} trips.</p>")
-        body.append(f"<h3>{WAIT_TITLE}</h3>")
-        seen = ", ".join(x for x in GROUPS[group] if x in DWELL_SERVICES)
-        hidden = ", ".join(x for x in GROUPS[group] if x not in DWELL_SERVICES)
-        note = f"How long a bus sits at the berth before it leaves (bus {seen} only" +             (f"; {hidden} can't be seen while waiting)" if hidden else ")") +             ". You wait on board for up to this long. LTA's \"due now\" isn't meaningful here: a bus is almost always loading."
-        body.append(f'<p class="note">{note}</p>')
-        body.append(fig_html(profile_fig(ok.iloc[0:0], waits, group, today, ytitle="bus waits (min)", height=280)))
-        body.append('<p class="note">Buses seen leaving the berth per hour, averaged over the days in the window. '
-                    "A lower bound: buses without GPS when they leave aren't counted.</p>")
-        body.append(fig_html(departures_fig(deps, group)))
+    weekday = pd.Timestamp(today).strftime("%a")
+    body = ['<div class="dirs" data-default="sg-jb">'
+            + "".join(f'<button type="button" data-dir="{d}" aria-pressed="false">{title}'
+                      f'<small>{DIRECTIONS[d]["name"]}</small></button>' for d, title in PAGES)
+            + "</div>"]
+    for direction, title in PAGES:
+        body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
+        body.append(plan_html(plan, plan_dates, direction, weekday))
+        body.append(details_html(direction, all_tracks[direction], all_trips, runs, days, now, today))
+        body.append("</section>")
     quality_trips = all_trips[all_trips.service_day.isin(days)]
     body.append(f"<h2>Data quality</h2><div class='scroll'>{table_html(quality(runs, quality_trips, days))}</div>")
     return page("\n".join(body), f"{day_label(days[-1])} – {day_label(days[0])} · updated {now:%H:%M}")
