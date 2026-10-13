@@ -37,6 +37,30 @@ def test_smoke(tmp_path):
     assert "No data yet" not in html
 
 
+def test_plan_your_day(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(10, 20), seed=3),
+            f"{DAY} 05:30", f"{DAY} 18:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
+    assert D.PLAN_TITLE in html
+    assert all(f'data-day="{d}"' in html for d in D.WEEKDAYS)
+    assert 'data-default="Fri"' in html  # opens on today's weekday
+    assert "Going to JB" in html and "Returning to Singapore" in html
+    assert "no Fri yet" in html  # only JB -> SG was simulated, so the SG -> JB leg says so instead of guessing
+    assert "Fastest:" in html
+
+
+def test_plan_stats_counts_days_per_weekday_and_direction():
+    rows = [{"direction": dr, "service": "170", "service_day": d, "left_a": pd.Timestamp(f"{d} 09:{10 + i}"),
+             "ride_min": 10 + i, "ok": True, "day_type": "weekday"}
+            for dr, d in (("jb-sg", DAY), ("jb-sg", "2026-10-16"), ("sg-jb", DAY)) for i in range(3)]
+    stats, dates = D.plan_stats(pd.DataFrame(rows))
+    assert dates[("jb-sg", "Fri")] == [DAY, "2026-10-16"] and dates[("sg-jb", "Fri")] == [DAY]
+    s = stats.set_index(["direction", "weekday", "group", "slot"])
+    assert s.loc[("jb-sg", "Fri", "160/170/170X", "09:00"), "n"] == 6
+    assert s.loc[("sg-jb", "Fri", "160/170/170X", "09:00"), "median"] == 11
+
+
 def test_empty_db(tmp_path):
     db = tmp_path / "causeway.db"
     open_db(db).close()
@@ -105,6 +129,18 @@ def test_departures_per_hour():
     d = D.departures_per_hour(pd.DataFrame(rows), runs).set_index(["group", "day_type", "slot"])
     assert d.loc[("160/170/170X", "weekday", "08:00"), "per_hour"] == 3
     assert d.loc[("160/170/170X", "weekday", "09:00"), "per_hour"] == 0.5
+
+
+def test_best_text_says_flat_when_differences_are_noise():
+    stats = pd.DataFrame({"direction": "sg-jb", "weekday": "Mon", "group": "160/170/170X",
+                          "slot": ["08:00", "12:00", "16:00", "20:00"], "n": 4, "median": [4.0, 3.0, 4.0, 5.0],
+                          "p25": 3.0, "p75": 5.0})
+    assert D.best_text(stats, "sg-jb", "Mon", "160/170/170X") == "About the same all day (~4 min)"
+    late = pd.DataFrame({"direction": ["sg-jb"], "weekday": "Mon", "group": "160/170/170X", "slot": ["23:00"], "n": 3,
+                         "median": [17.0], "p25": 15.0, "p75": 18.0})  # outside 06:00-23:00: doesn't count
+    assert D.best_text(pd.concat([stats, late]), "sg-jb", "Mon", "160/170/170X").startswith("About the same")
+    stats["median"] = [4.0, 3.0, 12.0, 5.0]
+    assert D.best_text(stats, "sg-jb", "Mon", "160/170/170X").startswith("Fastest: 12:00 (3 min)")
 
 
 def test_service_day_labels():

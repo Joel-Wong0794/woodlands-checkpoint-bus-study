@@ -1,18 +1,21 @@
-"""Stage 3: measure 46219 -> 46109 trips from GPS tracks. Pure functions: data in, data out.
+"""Stage 3: measure trips from GPS tracks, in either direction (config.DIRECTIONS). Pure functions: data in, data out.
 
 polls -> gps_points (one row per bus per minute) -> link_tracks (one track ~ one bus)
-      -> find_trips (left the JB checkpoint -> reached 46109) -> check_trips (flags) -> slot_stats
+      -> find_trips (left the boarding stop -> reached the alighting stop) -> check_trips (flags) -> slot_stats
 """
+import math
+
 import numpy as np
 import pandas as pd
 
-from config import (BACK_M, BLIND_FLAG_MIN, GAP_SEC, GROUPS, GATE_A_LAT, LINK_SLACK_M, MAX_LINK_M, MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN,
-                    MIN_TRIP_MIN, MIN_TRIPS_PER_SLOT, SERVICE_DAY_START_HOUR, SERVICES, SLOT_MIN, STOP_A, STOP_B,
-                    STOP_COORDS, ZONE_A_M, ZONE_B_M)
+from config import (BACK_M, BLIND_FLAG_MIN, CAUSEWAY_LAT, DIRECTIONS, GAP_SEC, GROUPS, LINK_SLACK_M, MAX_LINK_M,
+                    MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN, MIN_TRIP_MIN, MIN_TRIPS_PER_SLOT, SERVICE_DAY_START_HOUR,
+                    SERVICES, SLOT_MIN, STOP_COORDS)
 
 DUP_M = 60  # the same bus in both stops' lists, polled a second apart, can differ by ~20 m
+WOBBLE_M = 50  # GPS noise: a backward step up to this is treated as standing still
 POINT_COLS = ["t", "minute", "service", "lat", "lon", "dist_a", "dist_b", "at_a", "at_b"]
-TRIP_COLS = ["service", "group", "track", "service_day", "reached_a", "left_a", "reached_b", "wait_min", "ride_min",
+TRIP_COLS = ["direction", "service", "group", "track", "service_day", "reached_a", "left_a", "reached_b", "wait_min", "ride_min",
              "blind_min", "n_between", "blind", "ok", "reason"]
 
 
@@ -35,11 +38,14 @@ def to_frame(rows, cols):
 
 # ---------- 1. GPS points ----------
 
-def gps_points(polls, services=SERVICES):
-    """One row per bus per minute, with its distance to each stop and whether it is 'at' a stop."""
+def gps_points(polls, services=SERVICES, direction="jb-sg"):
+    """One row per bus per minute, with its distance to the boarding (a) and alighting (b) stop of `direction`
+    and whether it is 'at' each of them."""
+    d = DIRECTIONS[direction]
+    stop_a, stop_b = d["board"], d["alight"]
     df = to_frame(polls, ["polled_at", "stop", "service", "lat", "lon"])
-    # only this direction's stops: the collector also polls the SG -> JB stops
-    df = df[df.stop.isin([STOP_A, STOP_B]) & df.service.isin(services) & df.lat.notna() & df.lon.notna()].copy()
+    # only this direction's two stops: the collector polls both directions
+    df = df[df.stop.isin([stop_a, stop_b]) & df.service.isin(services) & df.lat.notna() & df.lon.notna()].copy()
     if df.empty:
         return pd.DataFrame(columns=POINT_COLS)
     df["t"] = pd.to_datetime(df.polled_at)
@@ -47,8 +53,8 @@ def gps_points(polls, services=SERVICES):
     df = df.drop_duplicates(["minute", "service", "stop", "lat", "lon"])
     # A bus appears at most once per list, so match 46109 rows to 46219 rows one-to-one, closest first,
     # and drop the matched 46109 rows. Only pairs within DUP_M can match, so find those first (vectorised).
-    a = df[df.stop == STOP_A].reset_index()
-    b = df[df.stop == STOP_B].reset_index()
+    a = df[df.stop == stop_a].reset_index()
+    b = df[df.stop == stop_b].reset_index()
     pairs = a.merge(b, on=["minute", "service"], suffixes=("_a", "_b"))
     pairs["d"] = metres(pairs.lat_a.values, pairs.lon_a.values, pairs.lat_b.values, pairs.lon_b.values)
     used_a, dup_b = set(), set()
@@ -57,10 +63,10 @@ def gps_points(polls, services=SERVICES):
             used_a.add(ia)
             dup_b.add(ib)
     df = df.drop(index=list(dup_b)).sort_index()
-    df["dist_a"] = metres(*STOP_COORDS[STOP_A], df.lat, df.lon)
-    df["dist_b"] = metres(*STOP_COORDS[STOP_B], df.lat, df.lon)
-    df["at_a"] = (df.dist_a <= ZONE_A_M) & (df.lat >= GATE_A_LAT)
-    df["at_b"] = df.dist_b <= ZONE_B_M
+    df["dist_a"] = metres(*STOP_COORDS[stop_a], df.lat, df.lon)
+    df["dist_b"] = metres(*STOP_COORDS[stop_b], df.lat, df.lon)
+    df["at_a"] = (df.dist_a <= d["board_m"]) & df.lat.between(*d["board_lat"])
+    df["at_b"] = (df.dist_b <= d["alight_m"]) & df.lat.between(*d["alight_lat"])
     return df[POINT_COLS].sort_values(["service", "t"]).reset_index(drop=True)
 
 
@@ -69,46 +75,62 @@ def gps_points(polls, services=SERVICES):
 def link_tracks(points):
     """Add a 'track' id: link each minute's points to the nearest reachable track, one-to-one, closest first.
 
-    A track ends when it has had no fix for MAX_LOST_MIN. A bus whose last fix was at 46109 has arrived: its
-    track only takes a point still standing at the stop (within DUP_M) in the next minute.
+    A track ends when it has had no fix for MAX_LOST_MIN. A bus whose last fix was at the alighting stop has
+    arrived: its track only takes a point still standing at the stop (within DUP_M) in the next minute.
     Points go first to tracks seen in the previous minute (closest first), then to arrived buses, and only
     then to tracks that have been lost for a while, so a lost track can't take over a bus being followed.
-    South of the JB checkpoint a track can't move more than BACK_M against its direction: buses only turn round
-    at the checkpoint, so such a link would be a jump to another bus (e.g. one that just switched its GPS on).
+    On the Causeway (CAUSEWAY_LAT) a track can't move more than BACK_M against its direction: buses only turn round
+    off it, so such a link would be a jump to another bus (e.g. one that just switched its GPS on). Smaller
+    backward steps (more than WOBBLE_M) are allowed but come last, so two buses close together don't swap.
     """
     if points.empty:
         return points.assign(track=pd.Series(dtype=str))
-    track = pd.Series("", index=points.index)
-    for svc, ps in points.groupby("service"):
-        active = []  # [id, last_t, lat, lon, last fix was at 46109, heading: -1 south / +1 north / 0 unknown]
+    # plain arrays: row-by-row pandas access was ~90% of the run time
+    svc_all = points.service.to_numpy()
+    minute_all = points.minute.to_numpy()
+    lat_all, lon_all = points.lat.to_numpy(float), points.lon.to_numpy(float)
+    at_b_all = points.at_b.to_numpy(bool)
+    track = np.empty(len(points), dtype=object)
+    k = 111_195
+    for svc in sorted(set(svc_all)):
+        rows = np.flatnonzero(svc_all == svc)
+        rows = rows[np.argsort(minute_all[rows], kind="stable")]
+        active = []  # [id, last minute, lat, lon, last fix at the alighting stop, heading: -1 south / +1 north / 0 unknown]
         n = 0
-        for minute, g in ps.groupby("minute"):
-            active = [a for a in active if (minute - a[1]).total_seconds() <= (60 if a[4] else MAX_LOST_MIN * 60)]
+        bounds = np.flatnonzero(np.diff(minute_all[rows].astype("int64"))) + 1
+        for g in np.split(rows, bounds):
+            minute = minute_all[g[0]]
+            active = [a for a in active
+                      if (minute - a[1]) / np.timedelta64(1, "s") <= (60 if a[4] else MAX_LOST_MIN * 60)]
             cand = []
-            for i, r in g.iterrows():
+            for i in g:
+                lat, lon = lat_all[i], lon_all[i]
                 for j, (_, last_t, la, lo, arrived, heading) in enumerate(active):
-                    if la < GATE_A_LAT and heading * (r.lat - la) * 111_195 < -BACK_M:
+                    on_causeway = CAUSEWAY_LAT[0] <= la < CAUSEWAY_LAT[1]
+                    ahead = heading * (lat - la) * k  # metres moved in the track's direction
+                    if on_causeway and ahead < -BACK_M:
                         continue
-                    gap = (minute - last_t).total_seconds()
-                    d = float(metres(la, lo, r.lat, r.lon))
+                    back = on_causeway and ahead < -WOBBLE_M
+                    gap = (minute - last_t) / np.timedelta64(1, "s")
+                    d = math.hypot((lon - lo) * k * math.cos(math.radians(la)), (lat - la) * k)  # = metres()
                     reach = DUP_M if arrived else min(MAX_SPEED_MS * gap + LINK_SLACK_M, MAX_LINK_M)
                     if d <= reach:
                         rank = 1 if arrived else (0 if gap <= 60 else 2)
-                        cand.append((rank, d, i, j))
+                        cand.append((rank, back, d, i, j))
             used_i, used_j = set(), set()
-            for _, d, i, j in sorted(cand):
+            for _, _, d, i, j in sorted(cand):
                 if i not in used_i and j not in used_j:
                     used_i.add(i)
                     used_j.add(j)
                     track[i] = active[j][0]
-                    move = (g.at[i, "lat"] - active[j][2]) * 111_195
+                    move = (lat_all[i] - active[j][2]) * k
                     heading = active[j][5] if abs(move) < BACK_M else int(np.sign(move))  # a wobble never flips it
-                    active[j][1:] = [minute, g.at[i, "lat"], g.at[i, "lon"], g.at[i, "at_b"], heading]
-            for i in g.index:
+                    active[j][1:] = [minute, lat_all[i], lon_all[i], at_b_all[i], heading]
+            for i in g:
                 if i not in used_i:
                     n += 1
                     track[i] = f"{svc}-{n}"
-                    active.append([track[i], minute, g.at[i, "lat"], g.at[i, "lon"], g.at[i, "at_b"], 0])
+                    active.append([track[i], minute, lat_all[i], lon_all[i], at_b_all[i], 0])
     return points.assign(track=track)
 
 
@@ -142,10 +164,11 @@ def find_trips(tracks):
 
 # ---------- 4. Gaps and flags ----------
 
-def poll_gaps(poll_runs):
-    """Stretches where consecutive successful polls of a stop are more than GAP_SEC apart."""
+def poll_gaps(poll_runs, direction="jb-sg"):
+    """Stretches where consecutive successful polls of a stop of `direction` are more than GAP_SEC apart."""
     runs = to_frame(poll_runs, ["polled_at", "stop", "ok"])
-    runs = runs[(runs.ok == 1) & runs.stop.isin([STOP_A, STOP_B])].copy()
+    stops = [DIRECTIONS[direction]["board"], DIRECTIONS[direction]["alight"]]
+    runs = runs[(runs.ok == 1) & runs.stop.isin(stops)].copy()
     runs["t"] = pd.to_datetime(runs.polled_at)
     rows = []
     for stop, g in runs.sort_values("t").groupby("stop"):
@@ -155,11 +178,12 @@ def poll_gaps(poll_runs):
     return to_frame(rows, ["stop", "gap_from", "gap_to"])
 
 
-def check_trips(trips, gaps):
+def check_trips(trips, gaps, direction="jb-sg"):
     """Add service_day and quality flags. A bad trip only drops itself, never the whole day."""
     t = trips.copy()
     if t.empty:
         return pd.DataFrame(columns=TRIP_COLS)
+    t["direction"] = direction
     t["group"] = t.service.map(group_of)
     t["service_day"] = (t.left_a - pd.Timedelta(hours=SERVICE_DAY_START_HOUR)).dt.strftime("%Y-%m-%d")
     t["blind"] = t.blind_min > BLIND_FLAG_MIN
@@ -173,10 +197,10 @@ def check_trips(trips, gaps):
     return t[TRIP_COLS].sort_values(["service", "left_a"]).reset_index(drop=True)
 
 
-def measure_trips(poll_runs, polls, services=SERVICES):
-    """All trips found, with flags. Use trips[trips.ok] for stats."""
-    tracks = link_tracks(gps_points(polls, services))
-    return check_trips(find_trips(tracks), poll_gaps(poll_runs))
+def measure_trips(poll_runs, polls, services=SERVICES, direction="jb-sg"):
+    """All trips found in `direction`, with flags. Use trips[trips.ok] for stats."""
+    tracks = link_tracks(gps_points(polls, services, direction))
+    return check_trips(find_trips(tracks), poll_gaps(poll_runs, direction), direction)
 
 
 # ---------- 5. Stats ----------

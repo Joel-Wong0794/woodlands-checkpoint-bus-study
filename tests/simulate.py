@@ -1,38 +1,49 @@
 """Fake poll generator for testing trips.py. Given TRUE buses, write poll_runs/polls rows as the collector would.
 
-A bus is a dict: {"service", "at_a", "left_a", "at_b"} (times as "YYYY-MM-DD HH:MM[:SS]"), plus optional
-"gps" (default True; False = timetable only, no position) and "via_b" (default False; True = the bus comes
-from Singapore, passing 46109 before it reaches 46219, like the 950 loop).
+A bus is a dict: {"service", "at_a", "left_a", "at_b"} (times as "YYYY-MM-DD HH:MM[:SS]"): it reaches the boarding
+stop at at_a, leaves it at left_a and reaches the alighting stop at at_b. Optional: "gps" (default True; False =
+timetable only, no position) and "via_b" (default False; True = the bus passes the alighting stop first, like
+the 950 loop from Singapore).
 
-Each minute both stops are polled. 46219 lists the next 3 buses that haven't left it yet, 46109 the next 3
-that haven't reached it yet (plus 1 min standing at the stop). Like the real API, the same bus in both
-lists has the same position.
+direction ("jb-sg" or "sg-jb", see config.DIRECTIONS) picks the two stops. Each minute both are polled. The
+boarding stop lists the next 3 buses that haven't left it yet, the alighting stop the next 3 that haven't reached it
+yet (plus 1 min standing at the stop). Like the real API, the same bus in both lists has the same position.
 """
 import random
 from datetime import datetime, timedelta
 
-from config import STOP_A, STOP_B, STOP_COORDS
+from config import DIRECTIONS, STOP_COORDS
 
 FMT = "%Y-%m-%d %H:%M:%S"
-A = STOP_COORDS[STOP_A]
-B = STOP_COORDS[STOP_B]
-NORTH = (A[0] + 0.027, A[1])   # ~3 km up the road into Johor
-SOUTH = (B[0] - 0.009, B[1])   # ~1 km into Singapore
 
 
 def to_dt(s):
     return s if isinstance(s, datetime) else datetime.fromisoformat(s)
 
 
-def waypoints(bus):
-    """(time, lat, lon) points the bus passes through; positions in between are interpolated."""
+def toward(frm, to, metres):
+    """The point `metres` from `frm` in the direction of `to`."""
+    k = metres / (((to[0] - frm[0]) * 111_195) ** 2 + ((to[1] - frm[1]) * 111_195) ** 2) ** 0.5
+    return frm[0] + k * (to[0] - frm[0]), frm[1] + k * (to[1] - frm[1])
+
+
+def waypoints(bus, direction="jb-sg"):
+    """(time, lat, lon) points the bus passes through; positions in between are interpolated.
+
+    The bus leaves the boarding zone 30 s after left_a and enters the alighting zone 30 s before at_b, so the
+    recovered times match the true ones whatever the zone sizes.
+    """
+    d = DIRECTIONS[direction]
+    A, B = STOP_COORDS[d["board"]], STOP_COORDS[d["alight"]]
     at_a, left_a, at_b = to_dt(bus["at_a"]), to_dt(bus["left_a"]), to_dt(bus["at_b"])
-    m = timedelta(minutes=1)
+    m, s30 = timedelta(minutes=1), timedelta(seconds=30)
+    before, after = toward(A, B, -3000), toward(B, A, -1000)  # ~3 km before boarding, ~1 km after alighting
     if bus.get("via_b"):
-        start = [(at_a - 16 * m, *SOUTH), (at_a - 12 * m, *B), (at_a - 11 * m, *B)]
+        start = [(at_a - 16 * m, *after), (at_a - 12 * m, *B), (at_a - 11 * m, *B)]
     else:
-        start = [(at_a - 10 * m, *NORTH)]
-    return start + [(at_a, *A), (left_a, *A), (at_b, *B), (at_b + m, *B)]
+        start = [(at_a - 10 * m, *before)]
+    return start + [(at_a, *A), (left_a, *A), (left_a + s30, *toward(A, B, d["board_m"] + 50)),
+                    (at_b - s30, *toward(B, A, d["alight_m"] + 50)), (at_b, *B), (at_b + m, *B)]
 
 
 def position(wps, t):
@@ -43,7 +54,7 @@ def position(wps, t):
     return None
 
 
-def simulate(buses, start, end, missing=(), flicker=(), noise_m=0.0, seed=0):
+def simulate(buses, start, end, missing=(), flicker=(), noise_m=0.0, seed=0, direction="jb-sg"):
     """Return (poll_runs, polls) as lists of dicts.
 
     missing: minutes ("YYYY-MM-DD HH:MM") with no poll at either stop, so no poll_runs row (a gap).
@@ -53,13 +64,14 @@ def simulate(buses, start, end, missing=(), flicker=(), noise_m=0.0, seed=0):
     rnd = random.Random(seed)
     missing = {to_dt(x) for x in missing}
     flicker = [(i, to_dt(a), to_dt(b)) for i, a, b in flicker]
-    wps = [waypoints(b) for b in buses]
+    board, alight = DIRECTIONS[direction]["board"], DIRECTIONS[direction]["alight"]
+    wps = [waypoints(b, direction) for b in buses]
     runs, polls = [], []
     t = to_dt(start)
     while t <= to_dt(end):
         if t not in missing:
             noise = {}
-            for stop, sec in ((STOP_A, 1), (STOP_B, 2)):
+            for stop, sec in ((board, 1), (alight, 2)):
                 pt = t + timedelta(seconds=sec)
                 listed = []
                 for i, (bus, wp) in enumerate(zip(buses, wps)):
@@ -67,9 +79,9 @@ def simulate(buses, start, end, missing=(), flicker=(), noise_m=0.0, seed=0):
                         continue
                     if not wp[0][0] <= pt <= wp[-1][0]:
                         continue
-                    if stop == STOP_A and pt <= to_dt(bus["left_a"]):
+                    if stop == board and pt <= to_dt(bus["left_a"]):
                         listed.append((to_dt(bus["at_a"]), i))
-                    if stop == STOP_B and pt <= to_dt(bus["at_b"]) + timedelta(minutes=1):
+                    if stop == alight and pt <= to_dt(bus["at_b"]) + timedelta(minutes=1):
                         listed.append((to_dt(bus["at_b"]), i))
                 listed = sorted(listed)[:3]
                 for seq, (eta, i) in enumerate(listed, start=1):

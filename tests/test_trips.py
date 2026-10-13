@@ -143,6 +143,24 @@ def test_other_stops_are_ignored():
     assert set(gps_points(polls + extra, ("170",)).index) == set(gps_points(polls, ("170",)).index)
 
 
+def test_sg_jb_round_trip():
+    """Singapore -> JB: board at Woodlands 46101, alight at JB checkpoint 46211."""
+    buses = random_buses(20, headway=(8, 15), wait=(0, 5), ride=(8, 22), seed=7)
+    runs, polls = simulate(buses, f"{DAY} 05:30", f"{DAY} 23:00", direction="sg-jb")
+    trips = measure_trips(runs, polls, services=("170",), direction="sg-jb")
+    assert_recovered(trips, buses)
+    assert set(trips.direction) == {"sg-jb"}
+
+
+def test_directions_dont_mix():
+    to_sg = random_buses(10, seed=8)
+    to_jb = random_buses(10, first="2026-10-09 06:03", seed=9)
+    r1, p1 = simulate(to_sg, f"{DAY} 05:30", f"{DAY} 12:00", direction="jb-sg")
+    r2, p2 = simulate(to_jb, f"{DAY} 05:30", f"{DAY} 12:00", direction="sg-jb")
+    assert_recovered(measure_trips(r1 + r2, p1 + p2, services=("170",), direction="jb-sg"), to_sg)
+    assert_recovered(measure_trips(r1 + r2, p1 + p2, services=("170",), direction="sg-jb"), to_jb)
+
+
 def test_poll_gaps():
     runs = [{"polled_at": f"{DAY} 10:0{m}:01", "stop": "46219", "ok": 1} for m in (0, 1, 5, 6)]
     runs.append({"polled_at": f"{DAY} 10:02:01", "stop": "46219", "ok": 0})  # a failed call doesn't fill a gap

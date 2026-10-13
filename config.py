@@ -3,7 +3,7 @@
 STOP_A = "46219"  # JB Checkpoint (start)
 STOP_B = "46109"  # Woodlands Checkpoint (end)
 
-# SG -> JB direction (collected from 11 Oct 2026, analysed later): all 4 services go 46101 -> 46211 (LTA BusRoutes).
+# SG -> JB direction (collected from 11 Oct 2026 23:31): all 4 services go 46101 -> 46211 (LTA BusRoutes).
 STOP_SG = "46101"  # W'lands Checkpt, departure side (board after Singapore exit immigration)
 STOP_JB = "46211"  # Johor Bahru Checkpt, arrival side (alight for Malaysian immigration)
 COLLECT_STOPS = (STOP_A, STOP_B, STOP_SG, STOP_JB)
@@ -20,7 +20,7 @@ GROUPS = {"160/170/170X": ("160", "170", "170X"), "950": ("950",)}
 
 # Copied from probe.py check 4 (LTA BusStops). Don't guess: {stop: (lat, lon)}
 # 46219/46109 from 8 Oct. LTA's BusStops showed them ~150-190 m away on 11 Oct; kept as is, because the JB -> SG
-# zones (ZONE_*, GATE_A_LAT) were tuned to real bus GPS fixes around these points.
+# zones in DIRECTIONS were tuned to real bus GPS fixes around these points.
 STOP_COORDS = {
     "46219": (1.465427, 103.768267),  # Johor Bahru Checkpt
     "46109": (1.446941, 103.769253),  # W'lands Checkpt
@@ -31,11 +31,28 @@ STOP_COORDS = {
 GAP_SEC = 180              # polls further apart than this are a gap
 
 # Stage 3 measures trips from GPS tracks (LTA's ETAs proved unreliable across the border).
-# "At 46219" = within ZONE_A_M of the stop AND north of GATE_A_LAT. From the 9 Oct GPS fixes: buses wait
-# in the JB checkpoint bus area (lat 1.4645-1.4665, up to ~450 m west of the stop); south of it is the Causeway.
-ZONE_A_M = 500
-GATE_A_LAT = 1.4645
-ZONE_B_M = 100             # "at 46109" = within this distance (real arrivals stop 30-65 m from it)
+# The Causeway as a latitude band between the two checkpoint areas. Buses only turn round outside it.
+CAUSEWAY_LAT = (1.4475, 1.4645)
+
+# Each direction: where you board and alight, and how a GPS fix counts as "at" each stop:
+# within <stop>_m metres of the stop AND inside the latitude bounds.
+DIRECTIONS = {
+    "jb-sg": {
+        "name": "JB → Singapore", "board": STOP_A, "alight": STOP_B,
+        # buses wait in the JB checkpoint bus area, lat 1.4645-1.4665, up to ~450 m west of the stop (9 Oct fixes)
+        "board_m": 500, "board_lat": (1.4645, 90.0),
+        # real arrivals stop 30-65 m from 46109
+        "alight_m": 100, "alight_lat": (-90.0, 90.0),
+    },
+    "sg-jb": {
+        "name": "Singapore → JB", "board": STOP_SG, "alight": STOP_JB,
+        # last fix before heading north: median 41 m, 90% within 155 m of 46101 (12-13 Oct fixes)
+        "board_m": 250, "board_lat": (-90.0, 1.4475),
+        # tracks end 220-310 m from the 46211 pin, inside the JB checkpoint area (12-13 Oct fixes)
+        "alight_m": 400, "alight_lat": (1.4635, 90.0),
+    },
+}
+
 MAX_SPEED_MS = 25          # a bus can't move faster than this (~90 km/h) between fixes...
 LINK_SLACK_M = 200         # ...plus this much GPS noise
 MAX_LINK_M = 2500          # never link fixes further apart than this (the crossing is ~2 km)
@@ -48,4 +65,5 @@ MIN_TRIP_MIN = 3
 MAX_TRIP_MIN = 240
 SERVICE_DAY_START_HOUR = 3
 DASH_DAYS = 14
+PLAN_DAYS = 28             # "Plan your day" window: 4 of each weekday
 MIN_TRIPS_PER_SLOT = 3
