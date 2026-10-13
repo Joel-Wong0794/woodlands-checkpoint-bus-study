@@ -75,14 +75,15 @@ def test_one_page_per_direction(tmp_path):
     assert 'class="grp" data-grp="160-170-170X"' in jb_sg  # details sit on their direction's page
 
 
-def test_bus_toggle_defaults_to_950(tmp_path):
+def test_bus_toggle_defaults_to_160_170_170X(tmp_path):
     db = tmp_path / "causeway.db"
     fill_db(db, random_buses(20, service="950", first=f"{DAY} 06:00", headway=(10, 20), seed=5)
             + random_buses(20, service="170", first=f"{DAY} 06:05", headway=(10, 20), seed=6),
             f"{DAY} 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
-    assert '<div class="grps" data-default="950">' in html
-    assert html.index('data-grp="950"') < html.index('data-grp="160-170-170X"')  # 950 button first
+    assert '<div class="grps" data-default="160-170-170X">' in html
+    assert html.index('data-grp="160-170-170X"') < html.index('data-grp="950"')  # 160/170/170X button first
+    assert 'grp: "bus"' in html  # new key: an old saved "950" doesn't override the new default
     # every plan day and the details exist once per bus, per page
     assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') > 2
 

@@ -29,7 +29,7 @@ PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 PAGES = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # one page each, in day-trip order
 BERTH = {"jb-sg": "JB", "sg-jb": "Woodlands"}  # where you board
-BUS_ORDER = ("950", "160/170/170X")  # bus toggle order; the first is the default
+BUS_ORDER = ("160/170/170X", "950")  # bus toggle order; the first is the default
 # LTA traffic cameras via data.gov.sg (camera ids checked against the images on 13 Oct 2026). The page fetches the
 # latest images itself, in the viewer's browser (the API allows that), every minute while it is open.
 CAMERA_API = "https://api.data.gov.sg/v1/transport/traffic-images"
@@ -423,26 +423,28 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paint);
 window.addEventListener("load", paint);
 // pick a page (direction), a weekday and a bus; shared across pages, remembered, and can come from the link,
 // e.g. causeway-bus-times#jb-sg,Sat,950
-function pick(sel, attr, value, key) {{
+// Only a tap is remembered (not the default), so a later change of default still reaches returning visitors.
+const KEYS = {{dir: "dir", day: "day", grp: "bus"}};  // "bus": renamed when the default became 160/170/170X
+function pick(sel, attr, value, save) {{
   document.querySelectorAll(sel).forEach(el => {{ el.hidden = el.dataset[attr] !== value; }});
   document.querySelectorAll(`button[data-${{attr}}]`).forEach(b => b.setAttribute("aria-pressed", b.dataset[attr] === value));
-  try {{ localStorage.setItem(key, value); }} catch (e) {{}}
+  if (save) {{ try {{ localStorage.setItem(KEYS[attr], value); }} catch (e) {{}} }}
   window.dispatchEvent(new Event("resize"));  // charts drawn while hidden need their width
 }}
-const showDir = d => pick(".dirpage", "dir", d, "dir");
-const showDay = d => pick(".day", "day", d, "day");
-const showGrp = d => pick(".grp", "grp", d, "grp");
+const showDir = (d, save) => pick(".dirpage", "dir", d, save);
+const showDay = (d, save) => pick(".day", "day", d, save);
+const showGrp = (d, save) => pick(".grp", "grp", d, save);
 document.addEventListener("click", e => {{
   const b = e.target.closest("button");
-  if (b && b.dataset.dir) showDir(b.dataset.dir);
-  if (b && b.dataset.day) showDay(b.dataset.day);
-  if (b && b.dataset.grp) showGrp(b.dataset.grp);
+  if (b && b.dataset.dir) showDir(b.dataset.dir, true);
+  if (b && b.dataset.day) showDay(b.dataset.day, true);
+  if (b && b.dataset.grp) showGrp(b.dataset.grp, true);
 }});
 function first(attr, fallback) {{
   const ok = v => v && document.querySelector(`[data-${{attr}}="${{v}}"]`);
   const fromLink = location.hash.slice(1).split(",").find(ok);
   let saved = null;
-  try {{ saved = localStorage.getItem(attr); }} catch (e) {{}}
+  try {{ saved = localStorage.getItem(KEYS[attr]); }} catch (e) {{}}
   return fromLink || (ok(saved) ? saved : fallback);
 }}
 const dirBar = document.querySelector(".dirs"), dayBar = document.querySelector(".days"),
