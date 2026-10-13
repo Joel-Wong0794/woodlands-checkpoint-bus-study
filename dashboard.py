@@ -76,11 +76,11 @@ def special_day(day):
     return C.is_special(str(day)[:10])
 
 
-def heat_label(day, school=None):
-    """Heatmap row label, e.g. 'Fri 25 Dec ★◆': ★ public holiday (SG or Johor), ◆ school holiday."""
-    f = C.day_flags(str(day)[:10], school)
-    marks = ("★" if f["sg_ph"] or f["my_ph"] else "") + ("◆" if f["school_hol"] else "")
-    return f"{day_label(day)} {marks}".strip()
+def heat_label(day):
+    """Heatmap row label, e.g. 'Fri 25 Dec ★' for a public holiday (Singapore or Johor).
+    School holidays are not shown for now (user, 13 Oct 2026); calendar_flags still supports them."""
+    f = C.day_flags(str(day)[:10])
+    return f"{day_label(day)} ★" if f["sg_ph"] or f["my_ph"] else day_label(day)
 
 
 def hour_x(t):
@@ -489,7 +489,7 @@ def details_html(direction, tracks, all_trips, runs, days, now, today):
         body.append(fig_html(profile_fig(ok, stats, group, today, direction=direction)))
         body.append(f"<h3>{HEATMAP_TITLE}</h3>"
                     '<p class="note">Median ride per day and hour. Darker = longer. Blank = no trip measured. '
-                    "★ public holiday (Singapore or Johor), ◆ school holiday.</p>")
+                    "★ public holiday (Singapore or Johor).</p>")
         body.append(fig_html(heatmap_fig(ok, group, days, direction)))
         bw = best_worst(stats, group)
         if len(bw):

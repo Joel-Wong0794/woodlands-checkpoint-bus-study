@@ -169,12 +169,9 @@ def test_best_text_says_flat_when_differences_are_noise():
     assert D.best_text(stats, "sg-jb", "Mon", "160/170/170X").startswith("Fastest: 12:00 (3 min)")
 
 
-def test_heatmap_labels_mark_holidays():
-    school = [{"country": "SG", "start": pd.Timestamp("2026-12-01").date(), "end": pd.Timestamp("2026-12-31").date(),
-               "name": "test range (made up)"}]
-    assert D.heat_label("2026-12-25", school) == "Fri 25 Dec ★◆"  # public holiday + school holiday
-    assert D.heat_label("2026-12-01", school) == "Tue 1 Dec ◆"
-    assert D.heat_label("2026-10-13", school) == "Tue 13 Oct"
+def test_heatmap_labels_mark_public_holidays():
+    assert D.heat_label("2026-12-25") == "Fri 25 Dec ★"
+    assert D.heat_label("2026-10-13") == "Tue 13 Oct"
 
 
 def test_plan_stats_leaves_out_holidays_eves_and_last_days():
