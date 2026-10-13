@@ -47,7 +47,7 @@ def test_plan_your_day(tmp_path):
     assert all(f'data-day="{d}"' in html for d in D.WEEKDAYS)
     assert 'data-default="Fri"' in html  # opens on today's weekday
     assert "Going to JB" in html and "Returning to Singapore" in html
-    assert "no Fri yet" in html  # only JB -> SG was simulated, so the SG -> JB leg says so instead of guessing
+    assert "No Fri data yet" in html  # only JB -> SG was simulated, so the SG -> JB page says so instead of guessing
     assert "Fastest:" in html
 
 
@@ -72,7 +72,19 @@ def test_one_page_per_direction(tmp_path):
     assert 'data-dir="sg-jb"' in html and 'data-dir="jb-sg"' in html
     assert html.count(f"<h2>{D.PLAN_TITLE}</h2>") == 2  # each page has its own Plan your day
     jb_sg = html[html.index('<section class="dirpage" data-dir="jb-sg"'):]
-    assert "Bus 160 / 170 / 170X · JB → Singapore" in jb_sg  # details sit on their direction's page
+    assert 'class="grp" data-grp="160-170-170X"' in jb_sg  # details sit on their direction's page
+
+
+def test_bus_toggle_defaults_to_950(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(20, service="950", first=f"{DAY} 06:00", headway=(10, 20), seed=5)
+            + random_buses(20, service="170", first=f"{DAY} 06:05", headway=(10, 20), seed=6),
+            f"{DAY} 05:30", f"{DAY} 18:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
+    assert '<div class="grps" data-default="950">' in html
+    assert html.index('data-grp="950"') < html.index('data-grp="160-170-170X"')  # 950 button first
+    # every plan day and the details exist once per bus, per page
+    assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') > 2
 
 
 def test_empty_db(tmp_path):
