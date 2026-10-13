@@ -169,7 +169,24 @@ def test_best_text_says_flat_when_differences_are_noise():
     assert D.best_text(stats, "sg-jb", "Mon", "160/170/170X").startswith("Fastest: 12:00 (3 min)")
 
 
+def test_heatmap_labels_mark_holidays():
+    school = [{"country": "SG", "start": pd.Timestamp("2026-12-01").date(), "end": pd.Timestamp("2026-12-31").date(),
+               "name": "test range (made up)"}]
+    assert D.heat_label("2026-12-25", school) == "Fri 25 Dec ★◆"  # public holiday + school holiday
+    assert D.heat_label("2026-12-01", school) == "Tue 1 Dec ◆"
+    assert D.heat_label("2026-10-13", school) == "Tue 13 Oct"
+
+
+def test_plan_stats_leaves_out_holidays_eves_and_last_days():
+    rows = [{"direction": "jb-sg", "service": "170", "service_day": d, "left_a": pd.Timestamp(f"{d} 09:{10 + i}"),
+             "ride_min": 10, "ok": True, "day_type": D.day_type(d), "special": D.special_day(d)}
+            for d in ("2026-12-17", "2026-12-24", "2026-12-31") for i in range(3)]  # Thu; Christmas eve; Thu
+    stats, dates = D.plan_stats(pd.DataFrame(rows))
+    assert dates[("jb-sg", "Thu")] == ["2026-12-17"]  # both eves (24 and 31 Dec) left out
+
+
 def test_service_day_labels():
     assert D.service_day(datetime.fromisoformat("2026-10-10 01:30")) == "2026-10-09"
     assert D.day_label("2026-10-12") == "Mon 12 Oct"
     assert D.day_type("2026-10-10") == "weekend" and D.day_type("2026-10-09") == "weekday"
+    assert D.day_type("2026-12-25") == "holiday"

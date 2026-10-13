@@ -6,12 +6,14 @@ import json
 import sqlite3
 import time
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
 
+import calendar_flags as C
 import trips as T
 from config import (CAUSEWAY_LAT, COLLECT_STOPS, DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
                     SERVICE_DAY_START_HOUR, SLOT_MIN)
@@ -62,9 +64,23 @@ def day_label(day):
     return f"{d:%a} {d.day} {d:%b}"
 
 
+@lru_cache(maxsize=None)
 def day_type(day):
-    """Stage 5 adds public holidays; until then weekday or weekend."""
-    return "weekend" if pd.Timestamp(day).dayofweek >= 5 else "weekday"
+    """'holiday' (public holiday in Singapore or Johor), 'weekend' or 'weekday' (calendar_flags)."""
+    return C.day_type(str(day)[:10])
+
+
+@lru_cache(maxsize=None)
+def special_day(day):
+    """A public holiday, its eve or the last day of a long weekend: left out of Plan your day."""
+    return C.is_special(str(day)[:10])
+
+
+def heat_label(day, school=None):
+    """Heatmap row label, e.g. 'Fri 25 Dec ★◆': ★ public holiday (SG or Johor), ◆ school holiday."""
+    f = C.day_flags(str(day)[:10], school)
+    marks = ("★" if f["sg_ph"] or f["my_ph"] else "") + ("◆" if f["school_hol"] else "")
+    return f"{day_label(day)} {marks}".strip()
 
 
 def hour_x(t):
@@ -185,6 +201,8 @@ def quality(runs, trips, days):
 def plan_stats(trips):
     """Ride per direction, weekday, group and slot (holidays left out), and the dates behind each direction x weekday."""
     t = trips[trips.ok & (trips.day_type != "holiday")]
+    if "special" in t:
+        t = t[~t.special.astype(bool)]  # eves and last days of long weekends aren't typical either
     stats = T.slot_stats(t, by=("direction", "weekday", "group", "slot"))
     t = t.assign(weekday=pd.to_datetime(t.service_day).dt.strftime("%a"))
     dates = {k: sorted(g.unique()) for k, g in t.groupby(["direction", "weekday"]).service_day}
@@ -300,7 +318,7 @@ def heatmap_fig(ok, group, days, direction="jb-sg"):
     agg = t.groupby(["service_day", "h"]).ride_min.agg(["median", "size"])
     z = [[agg["median"].get((d, h)) for h in HOURS] for d in days]
     n = [[int(agg["size"].get((d, h), 0)) for h in HOURS] for d in days]
-    labels = [day_label(d) for d in days]
+    labels = [heat_label(d) for d in days]
     ramp = LIGHT["ramp"]
     fig = go.Figure(go.Heatmap(x=[h + 0.5 for h in HOURS], y=labels, z=z, customdata=n, xgap=2, ygap=2,
                                colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)], zmin=0,
@@ -425,8 +443,8 @@ def plan_html(stats, dates, direction, default_day):
     out = [f"<h2>{PLAN_TITLE}</h2>",
            f'<p class="note">{d["name"]}, bus stop {d["board"]} → {d["alight"]}. Pick a day. Lines: median ride by '
            f"the hour the bus leaves (shaded: middle half of trips), from the last {PLAN_DAYS // 7} weeks of that "
-           f"weekday; hours with fewer than {MIN_TRIPS_PER_SLOT} trips hidden. Bus ride only: immigration queues are "
-           "not included.</p>",
+           f"weekday; hours with fewer than {MIN_TRIPS_PER_SLOT} trips hidden. Public holidays, their eves and the "
+           "last day of a long weekend are left out. Bus ride only: immigration queues are not included.</p>",
            f'<div class="days" data-default="{default_day}">'
            + "".join(f'<button type="button" data-day="{w}" aria-pressed="false">{w}</button>' for w in WEEKDAYS)
            + "</div>"]
@@ -470,7 +488,8 @@ def details_html(direction, tracks, all_trips, runs, days, now, today):
                     f"trips; hours with fewer than {MIN_TRIPS_PER_SLOT} trips hidden). Dots: today.</p>")
         body.append(fig_html(profile_fig(ok, stats, group, today, direction=direction)))
         body.append(f"<h3>{HEATMAP_TITLE}</h3>"
-                    '<p class="note">Median ride per day and hour. Darker = longer. Blank = no trip measured.</p>')
+                    '<p class="note">Median ride per day and hour. Darker = longer. Blank = no trip measured. '
+                    "★ public holiday (Singapore or Johor), ◆ school holiday.</p>")
         body.append(fig_html(heatmap_fig(ok, group, days, direction)))
         bw = best_worst(stats, group)
         if len(bw):
@@ -511,6 +530,7 @@ def build(db_path, now):
     found = [T.check_trips(T.find_trips(all_tracks[d]), T.poll_gaps(runs, d), d) for d in DIRECTIONS]
     all_trips = pd.concat([f for f in found if len(f)] or found[:1], ignore_index=True)
     all_trips["day_type"] = all_trips.service_day.map(day_type)
+    all_trips["special"] = all_trips.service_day.map(special_day)
     plan, plan_dates = plan_stats(all_trips)
 
     weekday = pd.Timestamp(today).strftime("%a")
