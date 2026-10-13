@@ -1,7 +1,8 @@
 # Install on the VM with:  crontab deploy/crontab.txt
 # Stage 2: poll both stops every minute. flock stops two runs overlapping.
 * * * * * cd $HOME/woodlands-checkpoint-bus-study && set -a && . ./.env && set +a && flock -n /tmp/collector.lock .venv/bin/python collector.py >> logs/collector.log 2>&1
-# Stage 4: rebuild the dashboard every 15 min and upload it to the public bucket.
-*/15 * * * * cd $HOME/woodlands-checkpoint-bus-study && flock -n /tmp/dashboard.lock sh -c '.venv/bin/python dashboard.py && gcloud storage cp dashboard.html gs://woodlands-checkpoint-bus-dashboard/index.html --cache-control=no-cache' >> logs/dashboard.log 2>&1
+# Stage 4: rebuild the dashboard every 15 min and upload it to the public bucket, as causeway-bus-times (the main
+# address; no extension, so the type is set explicitly) and as index.html (so older links keep working).
+*/15 * * * * cd $HOME/woodlands-checkpoint-bus-study && flock -n /tmp/dashboard.lock sh -c '.venv/bin/python dashboard.py && gcloud storage cp dashboard.html gs://woodlands-checkpoint-bus-dashboard/causeway-bus-times --cache-control=no-cache --content-type=text/html && gcloud storage cp dashboard.html gs://woodlands-checkpoint-bus-dashboard/index.html --cache-control=no-cache' >> logs/dashboard.log 2>&1
 # Stage 4: weekly backup (Sunday 03:00) to the private bucket.
 0 3 * * 0 cd $HOME/woodlands-checkpoint-bus-study && sqlite3 data/causeway.db ".backup data/backup.db" && gcloud storage cp data/backup.db gs://woodlands-checkpoint-bus-backup/causeway-$(date +\%F).db >> logs/backup.log 2>&1
