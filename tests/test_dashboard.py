@@ -159,6 +159,26 @@ def test_ride_now_names_its_hour():
     assert D.now_tile(trips, "950", pd.Timestamp(f"{DAY} 14:20")) == ("—", "no trips 13:20–14:20")
 
 
+def test_best_times_are_shaded():
+    stats = pd.DataFrame({"direction": "jb-sg", "weekday": "Sat", "group": "160/170/170X",
+                          "slot": [f"{h:02d}:00" for h in range(6, 23)], "n": 5, "p25": 1.0, "p75": 2.0,
+                          "median": [10.0 + (h % 7) for h in range(6, 23)]})
+    fig = D.day_fig(stats, "jb-sg", "Sat", "160/170/170X")
+    best = [sh for sh in fig.layout.shapes if sh.name == "best"]
+    assert sorted(sh.x0 for sh in best) == [7, 14, 21]  # the three lowest-median hours, shaded across their hour
+    assert all(sh.x1 - sh.x0 == 1 for sh in best)
+    assert "Best times" in [t.name for t in fig.data]  # legend entry for the shading
+    flat = stats.assign(median=10.0)  # all hours the same: nothing is "best"
+    assert not [sh for sh in D.day_fig(flat, "jb-sg", "Sat", "160/170/170X").layout.shapes if sh.name == "best"]
+
+
+def test_now_line_keeps_the_shading(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(5, service="170", first=f"{DAY} 06:00", seed=12), f"{DAY} 05:30", f"{DAY} 09:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 09:00:30"))
+    assert 's.name !== "now"' in html  # markNow swaps only its own line, not the best-times bands
+
+
 def test_empty_db(tmp_path):
     db = tmp_path / "causeway.db"
     open_db(db).close()
