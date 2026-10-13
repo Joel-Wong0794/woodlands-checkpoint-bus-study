@@ -31,7 +31,7 @@ def test_smoke(tmp_path):
     fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical",
-                 "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality",
+                 "Bus 160 / 170 / 170X", "Bus 950", "Data quality",
                  "Waiting at the JB berth"):
         assert text in html, text
     assert "No data yet" not in html
@@ -84,8 +84,8 @@ def test_bus_toggle_defaults_to_160_170_170X(tmp_path):
     assert '<div class="grps" data-default="160-170-170X">' in html
     assert html.index('data-grp="160-170-170X"') < html.index('data-grp="950"')  # 160/170/170X button first
     assert 'grp: "bus"' in html  # new key: an old saved "950" doesn't override the new default
-    # every plan day and the details exist once per bus, per page
-    assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') > 2
+    # one block per bus on each of the two pages
+    assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') == 2
 
 
 def test_live_cameras(tmp_path):
@@ -117,11 +117,26 @@ def test_ride_and_waiting_are_tabs(tmp_path):
             f"{DAY} 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     jb_sg = html[html.index('<section class="dirpage" data-dir="jb-sg"'):]
-    details = jb_sg[jb_sg.index("<h2>Last "):]
-    block = details[details.index('class="grp" data-grp="160-170-170X"'):]
-    assert block.index('data-tab="ride"') < block.index("Ride time through the day")
+    block = jb_sg[jb_sg.index('class="grp" data-grp="160-170-170X"'):]
+    assert block.index('data-tab="ride"') < block.index(D.PROFILE_TITLE) < block.index(D.HEATMAP_TITLE)
     assert block.index('class="panel" data-tab="wait"') < block.index("<h3>Waiting at the JB berth</h3>")
     assert 'class="panel" data-tab="wait" hidden' in block  # ride time shows first
+
+
+def test_one_day_selector_drives_everything(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(10, 20), seed=10),
+            f"{DAY} 05:30", f"{DAY} 18:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
+    jb_sg = html[html.index('<section class="dirpage" data-dir="jb-sg"'):]
+    block = jb_sg[jb_sg.index('class="grp" data-grp="160-170-170X"'):jb_sg.index('class="grp" data-grp="950"')]
+    ride = block[block.index('class="panel" data-tab="ride"'):block.index('class="panel" data-tab="wait"')]
+    wait = block[block.index('class="panel" data-tab="wait"'):]
+    for part in (ride, wait):  # both tabs have a view per weekday
+        assert all(f'class="day" data-day="{d}"' in part for d in D.WEEKDAYS)
+    assert "Typical" in block and block.count('class="day" data-day="Fri"') == 3  # tile, ride, wait
+    assert "Weekend median" not in html  # the weekday-vs-weekend chart is gone
+    assert html.count('<div class="days"') == 2  # one day selector per page
 
 
 def test_charts_cannot_zoom_but_still_hover():
@@ -158,22 +173,24 @@ def test_berth_wait_uses_only_services_with_gps_while_waiting():
              "ride_min": 10, "ok": True, "day_type": "weekday"}
             for i, (svc, w) in enumerate((("170", 20), ("170", 22), ("170", 24), ("170X", 1), ("160", 2)))]
     s = D.berth_wait(pd.DataFrame(rows))
-    r = s[(s.group == "160/170/170X") & (s.slot == "17:00")].iloc[0]
-    assert (r.n, r["median"]) == (3, 22)
+    r = s[(s.group == "160/170/170X") & (s.weekday == "Fri") & (s.slot == "17:00")].iloc[0]
+    assert (r.direction, r.n, r["median"]) == ("jb-sg", 3, 22)
 
 
 def test_departures_per_hour():
-    # Fri 9 Oct: 4 departures at 08:xx, 1 at 09:xx; Mon 12 Oct: 2 at 08:xx, none at 09:xx -> weekday 08:00 = 3/h,
-    # 09:00 = 0.5/h. Thu 8 Oct was polled only at 01:xx, so it doesn't dilute the 08:00 and 09:00 averages.
+    # Fri 9 and Fri 16 Oct: 4 + 2 departures at 08:xx, 1 + 0 at 09:xx -> Fri 08:00 = 3/h, 09:00 = 0.5/h.
+    # Thu 8 Oct was polled only at 01:xx, so it doesn't count as a day for 08:00 or 09:00.
+    fri2 = "2026-10-16"
     rows = [{"service": "170", "service_day": d, "left_a": pd.Timestamp(f"{d} {t}"), "ok": True}
             for d, t in ((DAY, "08:05"), (DAY, "08:20"), (DAY, "08:35"), (DAY, "08:50"),
-                         ("2026-10-12", "08:10"), ("2026-10-12", "08:40"), (DAY, "09:10"))]
+                         (fri2, "08:10"), (fri2, "08:40"), (DAY, "09:10"))]
     runs = pd.DataFrame([{"polled_at": f"{d} {h}:{m:02d}:01", "stop": "46219", "ok": 1}
-                         for d, hours in ((DAY, ("08", "09")), ("2026-10-12", ("08", "09")), ("2026-10-09", ("01",)))
+                         for d, hours in ((DAY, ("08", "09")), (fri2, ("08", "09")), ("2026-10-09", ("01",)))
                          for h in hours for m in range(0, 60, 10)])
-    d = D.departures_per_hour(pd.DataFrame(rows), runs).set_index(["group", "day_type", "slot"])
-    assert d.loc[("160/170/170X", "weekday", "08:00"), "per_hour"] == 3
-    assert d.loc[("160/170/170X", "weekday", "09:00"), "per_hour"] == 0.5
+    d = D.departures_per_hour(pd.DataFrame(rows), runs).set_index(["group", "weekday", "slot"])
+    assert d.loc[("160/170/170X", "Fri", "08:00"), "per_hour"] == 3
+    assert d.loc[("160/170/170X", "Fri", "09:00"), "per_hour"] == 0.5
+    assert list(D.departures_per_hour(pd.DataFrame(rows), runs).columns) == ["group", "weekday", "slot", "per_hour"]
 
 
 def test_best_text_says_flat_when_differences_are_noise():
