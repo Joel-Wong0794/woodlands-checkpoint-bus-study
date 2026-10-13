@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 
 import calendar_flags as C
 import trips as T
-from config import (CAUSEWAY_LAT, COLLECT_STOPS, DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
+from config import (COLLECT_STOPS, DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
                     SERVICE_DAY_START_HOUR, SLOT_MIN)
 
 ROOT = Path(__file__).parent
@@ -93,7 +93,6 @@ if (lb) {
 # when they leave, so their measured "wait" is just the last minute or two and is left out. At Woodlands all four
 # report while waiting (12-13 Oct: median waits 8-13 min for every service).
 DWELL_SERVICES = {"jb-sg": ("170", "950"), "sg-jb": ("160", "170", "170X", "950")}
-FRESH_MIN = 5        # a bus counts as "on the bridge now" only if its last GPS fix is this recent
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
@@ -161,29 +160,6 @@ def group_key(group):
 
 # ---------- Pure calculations ----------
 
-def on_bridge(tracks, now):
-    """Buses that left the boarding stop and haven't reached the alighting stop, whose latest GPS fix is on the
-    Causeway and less than FRESH_MIN old. (A track that passed the boarding area and then went elsewhere, e.g.
-    back into Singapore, is not on the bridge.)"""
-    cols = ["group", "service", "track", "left_a", "elapsed_min"]
-    rows = []
-    for tid, g in tracks[tracks.t <= now].sort_values("t").groupby("track"):
-        at_a = g[g.at_a]
-        if at_a.empty:
-            continue
-        left = at_a.t.max()
-        after = g[g.t > left]
-        if after.empty or after.at_b.any() or (now - after.t.max()).total_seconds() > FRESH_MIN * 60:
-            continue
-        if not CAUSEWAY_LAT[0] <= after.lat.iloc[-1] < CAUSEWAY_LAT[1]:
-            continue
-        elapsed = (now - left).total_seconds() / 60
-        if elapsed <= MAX_TRIP_MIN:
-            rows.append({"group": T.group_of(g.service.iloc[0]), "service": g.service.iloc[0], "track": tid,
-                         "left_a": left, "elapsed_min": elapsed})
-    return T.to_frame(rows, cols)
-
-
 def best_worst(stats, group, n=3):
     """The n slots with the lowest and highest median ride, per day type, between BEST_HOURS.
 
@@ -226,8 +202,9 @@ def departures_per_hour(trips, runs, direction="jb-sg"):
     return d[cols]
 
 
-def tiles(trips, stats, bridge, group, now, gap_today):
-    """Values for the Now / Typical / On the bridge now tiles of one group."""
+def tiles(trips, stats, group, now):
+    """Values for the Now / Typical tiles of one group. ("On the bridge now" was removed on 13 Oct 2026: a count of
+    GPS-tracked buses on the Causeway could mislead, since many buses aren't tracked.)"""
     ok = trips[trips.ok & (trips.group == group)]
     recent = ok[(ok.reached_b > now - timedelta(minutes=60)) & (ok.reached_b <= now)]
     now_v = (f"{recent.ride_min.median():.0f} min", f"{len(recent)} trips, last hour") \
@@ -237,14 +214,7 @@ def tiles(trips, stats, bridge, group, now, gap_today):
     s = stats[(stats.group == group) & (stats.day_type == dtype) & (stats.slot == slot)]
     typ_v = (f"{s['median'].iloc[0]:.0f} min", f"{dtype} {slot} · {int(s.n.iloc[0])} trips") \
         if len(s) else ("—", "not enough data yet")
-    b = bridge[bridge.group == group]
-    if gap_today:
-        bridge_v = ("—", "polling gap today")
-    elif b.empty:
-        bridge_v = ("0", "none on the Causeway")
-    else:
-        bridge_v = (f"{len(b)}", f"longest {b.elapsed_min.max():.0f} min so far")
-    return {"Now": now_v, "Typical": typ_v, "On the bridge now": bridge_v}
+    return {"Now": now_v, "Typical": typ_v}
 
 
 def quality(runs, trips, days):
@@ -297,8 +267,10 @@ def base_layout(fig, height):
                       plot_bgcolor=LIGHT["surface"], font=dict(color=LIGHT["ink"], size=12,
                       family="system-ui, -apple-system, Segoe UI, sans-serif"),
                       legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, font=dict(color=LIGHT["ink2"])),
-                      hovermode="closest")
+                      hovermode="closest", dragmode=False)  # no zoom or pan; tap/hover still shows details
     ticks = list(range(5, 26, 2))
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
     fig.update_xaxes(range=[4.5, 25.5], tickvals=ticks, ticktext=[f"{h % 24:02d}:00" for h in ticks],
                      gridcolor=LIGHT["grid"], linecolor=LIGHT["grid"], zeroline=False,
                      tickfont=dict(color=LIGHT["ink2"]), title_font=dict(color=LIGHT["ink2"]))
@@ -401,7 +373,8 @@ def heatmap_fig(ok, group, days, direction="jb-sg"):
 # ---------- Page ----------
 
 def fig_html(fig):
-    return fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False, "responsive": True})
+    return fig.to_html(full_html=False, include_plotlyjs=False,
+                       config={"displayModeBar": False, "responsive": True, "doubleClick": False, "scrollZoom": False})
 
 
 def table_html(df):
@@ -436,6 +409,10 @@ h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h
 .grps button {{ flex:1; min-height:36px; border:1px solid var(--line); border-radius:8px; background:var(--tile);
   color:var(--ink); font:inherit; cursor:pointer; }}
 .grps button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
+.tabs {{ display:flex; gap:0; margin:14px 0 4px; border-bottom:1px solid var(--line); }}
+.tabs button {{ flex:1; min-height:40px; border:0; border-bottom:3px solid transparent; background:none; color:var(--ink2);
+  font:inherit; cursor:pointer; }}
+.tabs button[aria-pressed="true"] {{ color:var(--ink); border-bottom-color:var(--ink); font-weight:600; }}
 details {{ margin:28px 0 8px; }} summary {{ font-weight:600; cursor:pointer; }}
 .cams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:8px 0 0; }}
 .cam {{ margin:0; }} .cam img {{ width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:8px; background:var(--tile); display:block; }}
@@ -524,11 +501,13 @@ function pick(sel, attr, value, save) {{
 const showDir = (d, save) => pick(".dirpage", "dir", d, save);
 const showDay = (d, save) => pick(".day", "day", d, save);
 const showGrp = (d, save) => pick(".grp", "grp", d, save);
+const showTab = d => pick(".panel", "tab", d, false);  // tabs always start on Ride time
 document.addEventListener("click", e => {{
   const b = e.target.closest("button");
   if (b && b.dataset.dir) showDir(b.dataset.dir, true);
   if (b && b.dataset.day) showDay(b.dataset.day, true);
   if (b && b.dataset.grp) showGrp(b.dataset.grp, true);
+  if (b && b.dataset.tab) showTab(b.dataset.tab);
 }});
 function first(attr, fallback, useSaved = true) {{
   const ok = v => v && document.querySelector(`[data-${{attr}}="${{v}}"]`);
@@ -598,25 +577,25 @@ def plan_html(stats, dates, direction, default_day):
     return "\n".join(out)
 
 
-def details_html(direction, tracks, all_trips, runs, days, now, today):
+def details_html(direction, all_trips, runs, days, now, today):
     """The last DASH_DAYS of one direction, per group: tiles, profile, heatmap, best/worst, waiting at the berth."""
     berth = BERTH[direction]
-    gaps = T.poll_gaps(runs, direction)
     trips = all_trips[(all_trips.direction == direction) & all_trips.service_day.isin(days)].reset_index(drop=True)
     ok = trips[trips.ok]
     stats = T.slot_stats(ok[ok.day_type != "holiday"], by=("group", "day_type", "slot"))
-    bridge = on_bridge(tracks, pd.Timestamp(now))
     waits = berth_wait(trips, direction)
     deps = departures_per_hour(trips, runs, direction)
-    gap_today = bool(len(gaps)) and (gaps.gap_to.map(service_day) == today).any()
     body = [f"<h2>Last {len(days)} days</h2>"]
     for group in BUS_ORDER:
         body.append(f'<div class="grp" data-grp="{group_key(group)}">')
         if ok[ok.group == group].empty:
             body.append('<p class="note">No trips measured yet.</p></div>')
             continue
-        tv = tiles(trips, stats, bridge, group, pd.Timestamp(now), gap_today)
+        tv = tiles(trips, stats, group, pd.Timestamp(now))
         body.append('<div class="tiles">' + "".join(tile_html(k, *v) for k, v in tv.items()) + "</div>")
+        body.append('<div class="tabs"><button type="button" data-tab="ride" aria-pressed="true">Ride time</button>'
+                    f'<button type="button" data-tab="wait" aria-pressed="false">Waiting at the {berth} berth</button>'
+                    '</div><div class="panel" data-tab="ride">')
         body.append(f'<h3>{PROFILE_TITLE}</h3><p class="note">Dots: today.</p>')
         body.append(fig_html(profile_fig(ok, stats, group, today, direction=direction)))
         body.append(f'<h3>{HEATMAP_TITLE}</h3><p class="note">Darker = longer · ★ public holiday</p>')
@@ -628,6 +607,7 @@ def details_html(direction, tracks, all_trips, runs, days, now, today):
             body.append(f"<h3>Best and worst times (06:00–23:00)</h3><div class='scroll'>{table_html(bw)}</div>")
         else:
             body.append('<h3>Best and worst times (06:00–23:00)</h3><p class="note">Not enough trips yet.</p>')
+        body.append('</div><div class="panel" data-tab="wait" hidden>')
         seen = ", ".join(x for x in GROUPS[group] if x in DWELL_SERVICES[direction])
         hidden = ", ".join(x for x in GROUPS[group] if x not in DWELL_SERVICES[direction])
         note = "How long the bus waits before leaving" + (f" (bus {seen} only)" if hidden and seen else "") + "."
@@ -637,7 +617,7 @@ def details_html(direction, tracks, all_trips, runs, days, now, today):
                                              height=280, direction=direction)))
         body.append('<p class="note">Buses seen leaving per hour (at least).</p>')
         body.append(fig_html(departures_fig(deps, group, direction)))
-        body.append("</div>")
+        body.append("</div></div>")  # panel, group
     return "\n".join(body)
 
 
@@ -676,7 +656,7 @@ def build(db_path, now):
     for direction, title in PAGES:
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
         body.append(plan_html(plan, plan_dates, direction, weekday))
-        body.append(details_html(direction, all_tracks[direction], all_trips, runs, days, now, today))
+        body.append(details_html(direction, all_trips, runs, days, now, today))
         body.append("</section>")
     quality_trips = all_trips[all_trips.service_day.isin(days)]
     body.append(f"<details><summary>Data quality</summary><div class='scroll'>"

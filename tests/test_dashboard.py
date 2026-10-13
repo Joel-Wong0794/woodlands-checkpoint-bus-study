@@ -6,7 +6,6 @@ import pandas as pd
 import dashboard as D
 from collector import open_db
 from tests.simulate import random_buses, simulate
-from trips import gps_points, link_tracks
 
 DAY = "2026-10-09"  # a Friday
 
@@ -31,11 +30,12 @@ def test_smoke(tmp_path):
              + random_buses(25, service="950", first="2026-10-08 06:00", headway=(40, 70), seed=2))
     fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
-    for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical", "On the bridge now",
+    for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical",
                  "Bus 160 / 170 / 170X", "Bus 950", "Best and worst times", "Data quality",
                  "Waiting at the JB berth"):
         assert text in html, text
     assert "No data yet" not in html
+    assert "On the bridge now" not in html  # removed: it could mislead
 
 
 def test_plan_your_day(tmp_path):
@@ -111,50 +111,33 @@ def test_browser_picks_today_and_marks_now(tmp_path):
     assert "showDay(first(\"day\", todayName(), false))" in html  # the weekday isn't restored from a past visit
 
 
+def test_ride_and_waiting_are_tabs(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(20, service="170", first=f"{DAY} 06:00", headway=(10, 20), seed=9),
+            f"{DAY} 05:30", f"{DAY} 18:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
+    jb_sg = html[html.index('<section class="dirpage" data-dir="jb-sg"'):]
+    details = jb_sg[jb_sg.index("<h2>Last "):]
+    block = details[details.index('class="grp" data-grp="160-170-170X"'):]
+    assert block.index('data-tab="ride"') < block.index("Ride time through the day")
+    assert block.index('class="panel" data-tab="wait"') < block.index("<h3>Waiting at the JB berth</h3>")
+    assert 'class="panel" data-tab="wait" hidden' in block  # ride time shows first
+
+
+def test_charts_cannot_zoom_but_still_hover():
+    import plotly.graph_objects as go
+    fig = D.base_layout(go.Figure(go.Scatter(x=[5, 6], y=[1, 2], hovertemplate="%{y}")), 300)
+    assert fig.layout.xaxis.fixedrange and fig.layout.yaxis.fixedrange  # no drag / pinch zoom
+    assert fig.layout.dragmode is False
+    assert fig.layout.hovermode == "closest"  # tapping a point still shows its details
+    assert '"doubleClick": false' in D.fig_html(fig) or '"doubleClick":false' in D.fig_html(fig)
+
+
 def test_empty_db(tmp_path):
     db = tmp_path / "causeway.db"
     open_db(db).close()
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00"))
     assert "No data yet" in html
-
-
-def test_on_bridge_now():
-    # 5 buses left 46219; by 10:30 three have reached 46109 and two are on the Causeway
-    buses = [bus("09:50", "09:52", "10:05"), bus("09:55", "09:58", "10:12"), bus("10:00", "10:03", "10:20"),
-             bus("10:10", "10:14", "10:40"), bus("10:18", "10:22", "10:50")]
-    _, polls = simulate(buses, f"{DAY} 09:30", f"{DAY} 10:30")
-    now = datetime.fromisoformat(f"{DAY} 10:30:30")
-    b = D.on_bridge(link_tracks(gps_points(polls, ("170",))), now)
-    assert len(b) == 2
-    # now - left 46219 (10:22, 10:14) = 8.5 and 16.5 min; the last fix at the checkpoint is known to ~1 min
-    assert all(abs(x - true) <= 1.5 for x, true in zip(sorted(b.elapsed_min), [8.5, 16.5]))
-    assert set(b.group) == {"160/170/170X"}
-
-
-def test_on_bridge_ignores_stale_tracks():
-    # a bus last seen on the Causeway 20 min ago (dropped off the lists) is not "on the bridge now"
-    _, polls = simulate([bus("10:00", "10:02", "10:40")], f"{DAY} 09:50", f"{DAY} 10:10")
-    b = D.on_bridge(link_tracks(gps_points(polls, ("170",))), datetime.fromisoformat(f"{DAY} 10:30"))
-    assert b.empty
-
-
-def test_on_bridge_ignores_fixes_after_now():
-    # rebuilding for an earlier time: a bus that only leaves later must not count
-    _, polls = simulate([bus("10:00", "10:02", "10:20"), bus("10:30", "10:32", "10:50")], f"{DAY} 09:50", f"{DAY} 11:00")
-    b = D.on_bridge(link_tracks(gps_points(polls, ("170",))), datetime.fromisoformat(f"{DAY} 10:10"))
-    assert len(b) == 1 and 7 <= b.elapsed_min.iloc[0] <= 9.5
-
-
-def test_on_bridge_only_counts_buses_on_the_causeway():
-    # real 13 Oct case: a track passed the Woodlands boarding area, then its latest fixes are ~1 km south, in Singapore
-    t0 = pd.Timestamp(f"{DAY} 09:30")
-    def fixes(track, lats):
-        return [{"t": t0 + pd.Timedelta(minutes=i), "service": "170X", "track": track, "lat": la,
-                 "at_a": i == 0, "at_b": False} for i, la in enumerate(lats)]
-    tracks = pd.DataFrame(fixes("in-sg", [1.4462, 1.4440, 1.4380, 1.4378])     # left the area, went south
-                          + fixes("on-bridge", [1.4462, 1.4490, 1.4530, 1.4570]))  # left the area, crossing north
-    b = D.on_bridge(tracks, t0 + pd.Timedelta(minutes=4))
-    assert b.track.tolist() == ["on-bridge"]
 
 
 def test_best_worst():
