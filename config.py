@@ -29,6 +29,7 @@ STOP_COORDS = {
 }
 
 GAP_SEC = 180              # polls further apart than this are a gap
+POLL_SEC = 60              # the collector polls once a minute (cron); used to correct times for the polling
 
 # Stage 3 measures trips from GPS tracks (LTA's ETAs proved unreliable across the border).
 # The Causeway as a latitude band between the two checkpoint areas. Buses only turn round outside it.
@@ -61,7 +62,7 @@ MAX_LOST_MIN = 15          # a track survives this long without a fix (buses dro
 BLIND_FLAG_MIN = 5         # a ride with a longer stretch without fixes is flagged (time less precise)
 SLOT_MIN = 60              # slot size for stats; hourly until there are enough weeks of data
 
-MIN_TRIP_MIN = 3
+MIN_TRIP_MIN = 2           # on the corrected ride: drops exactly the trips the old 3-min floor on measured rides did
 MAX_TRIP_MIN = 240
 SERVICE_DAY_START_HOUR = 3
 DASH_DAYS = 14

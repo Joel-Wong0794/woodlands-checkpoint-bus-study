@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from config import (BACK_M, BLIND_FLAG_MIN, CAUSEWAY_LAT, DIRECTIONS, GAP_SEC, GROUPS, LINK_SLACK_M, MAX_LINK_M,
+from config import (BACK_M, BLIND_FLAG_MIN, CAUSEWAY_LAT, DIRECTIONS, GAP_SEC, GROUPS, LINK_SLACK_M, MAX_LINK_M, POLL_SEC,
                     MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN, MIN_TRIP_MIN, MIN_TRIPS_PER_SLOT, SERVICE_DAY_START_HOUR,
                     SERVICES, SLOT_MIN, STOP_COORDS)
 
@@ -157,8 +157,13 @@ def find_trips(tracks):
                              "reached_b": r.t, "blind_min": blind, "n_between": len(ride) - 2})
                 reached_a = left_a = None
     df = to_frame(rows, ["service", "track", "reached_a", "left_a", "reached_b", "blind_min", "n_between"])
-    df["wait_min"] = (df.left_a - df.reached_a).dt.total_seconds() / 60 if len(df) else []
-    df["ride_min"] = (df.reached_b - df.left_a).dt.total_seconds() / 60 if len(df) else []
+    # Polling correction: a bus is only seen once a minute, so on average it really left the boarding stop half a
+    # poll after its last sighting there and reached the alighting stop half a poll before its first sighting there.
+    # Measured rides are therefore ~1 poll too long and measured waits ~1 poll too short; correct both by one poll.
+    # (reached_a / left_a / reached_b stay the sighting times.)
+    poll_min = POLL_SEC / 60
+    df["wait_min"] = (df.left_a - df.reached_a).dt.total_seconds() / 60 + poll_min if len(df) else []
+    df["ride_min"] = (df.reached_b - df.left_a).dt.total_seconds() / 60 - poll_min if len(df) else []
     return df
 
 

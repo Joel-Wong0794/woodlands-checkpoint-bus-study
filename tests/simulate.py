@@ -30,20 +30,21 @@ def toward(frm, to, metres):
 def waypoints(bus, direction="jb-sg"):
     """(time, lat, lon) points the bus passes through; positions in between are interpolated.
 
-    The bus leaves the boarding zone 30 s after left_a and enters the alighting zone 30 s before at_b, so the
-    recovered times match the true ones whatever the zone sizes.
+    The bus approaches the boarding stop for 10 minutes (so even a short stop is seen inside the zone), leaves the
+    zone exactly at left_a and enters the alighting zone exactly at at_b (it jumps across each edge in 1 s), so the
+    only error left in the ride is the once-a-minute polling, which trips.py corrects for.
     """
     d = DIRECTIONS[direction]
     A, B = STOP_COORDS[d["board"]], STOP_COORDS[d["alight"]]
     at_a, left_a, at_b = to_dt(bus["at_a"]), to_dt(bus["left_a"]), to_dt(bus["at_b"])
-    m, s30 = timedelta(minutes=1), timedelta(seconds=30)
+    m, s1 = timedelta(minutes=1), timedelta(seconds=1)
     before, after = toward(A, B, -3000), toward(B, A, -1000)  # ~3 km before boarding, ~1 km after alighting
     if bus.get("via_b"):
         start = [(at_a - 16 * m, *after), (at_a - 12 * m, *B), (at_a - 11 * m, *B)]
     else:
         start = [(at_a - 10 * m, *before)]
-    return start + [(at_a, *A), (left_a, *A), (left_a + s30, *toward(A, B, d["board_m"] + 50)),
-                    (at_b - s30, *toward(B, A, d["alight_m"] + 50)), (at_b, *B), (at_b + m, *B)]
+    return start + [(at_a, *A), (left_a, *A), (left_a + s1, *toward(A, B, d["board_m"] + 50)),
+                    (at_b - s1, *toward(B, A, d["alight_m"] + 50)), (at_b, *B), (at_b + m, *B)]
 
 
 def position(wps, t):
@@ -71,7 +72,9 @@ def simulate(buses, start, end, missing=(), flicker=(), noise_m=0.0, seed=0, dir
     while t <= to_dt(end):
         if t not in missing:
             noise = {}
-            for stop, sec in ((board, 1), (alight, 2)):
+            # both stops at the same instant: the real collector polls them ~1 s apart, but here a bus crosses a
+            # zone edge in 1 s, so a 1-s offset could show one bus in two places and break its track
+            for stop, sec in ((board, 1), (alight, 1)):
                 pt = t + timedelta(seconds=sec)
                 listed = []
                 for i, (bus, wp) in enumerate(zip(buses, wps)):
@@ -91,7 +94,9 @@ def simulate(buses, start, end, missing=(), flicker=(), noise_m=0.0, seed=0, dir
                         if i not in noise:  # same noise in both stops' lists, as in real data
                             noise[i] = (rnd.uniform(-noise_m, noise_m) / 111_000, rnd.uniform(-noise_m, noise_m) / 111_000)
                         la, lo = position(wps[i], pt)
-                        lat, lon = la + noise[i][0], lo + noise[i][1]
+                        # each bus a couple of metres apart, like neighbouring spots in a bay: two real buses never
+                        # report the exact same position, and identical rows would be merged as duplicates
+                        lat, lon = la + noise[i][0], lo + noise[i][1] + (i % 7) * 0.00002
                     polls.append({"polled_at": pt.strftime(FMT), "stop": stop, "service": bus["service"], "seq": seq,
                                   "eta": eta.strftime(FMT), "monitored": int(bus.get("gps", True)), "lat": lat,
                                   "lon": lon, "load": "SEA", "bus_type": "SD", "origin": None, "destination": None})
