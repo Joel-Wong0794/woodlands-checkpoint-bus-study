@@ -44,6 +44,7 @@ def test_plan_your_day(tmp_path):
             f"{DAY} 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     assert D.PLAN_TITLE in html
+    assert "Select a day to see typical wait (past 4 weeks)" in html
     assert all(f'data-day="{d}"' in html for d in D.WEEKDAYS)
     assert 'data-default="Fri"' in html  # opens on today's weekday
     assert "Going to JB" in html and "Returning to Singapore" in html
@@ -120,7 +121,9 @@ def test_ride_and_waiting_are_tabs(tmp_path):
     block = jb_sg[jb_sg.index('class="grp" data-grp="160-170-170X"'):]
     assert block.index('data-tab="ride"') < block.index(D.PROFILE_TITLE) < block.index(D.HEATMAP_TITLE)
     assert block.index('class="panel" data-tab="wait"') < block.index("<h3>Waiting at the JB berth</h3>")
-    assert 'class="panel" data-tab="wait" hidden' in block  # ride time shows first
+    # waiting comes first: left tab, pressed, shown; ride time hidden until tapped
+    assert block.index('<button type="button" data-tab="wait" aria-pressed="true">') < block.index('data-tab="ride"')
+    assert 'class="panel" data-tab="ride" hidden' in block and 'class="panel" data-tab="wait" hidden' not in block
 
 
 def test_one_day_selector_drives_everything(tmp_path):
@@ -146,6 +149,13 @@ def test_charts_cannot_zoom_but_still_hover():
     assert fig.layout.dragmode is False
     assert fig.layout.hovermode == "closest"  # tapping a point still shows its details
     assert '"doubleClick": false' in D.fig_html(fig) or '"doubleClick":false' in D.fig_html(fig)
+
+
+def test_ride_now_names_its_hour():
+    trips = pd.DataFrame([{"ok": True, "group": "160/170/170X", "ride_min": m,
+                           "reached_b": pd.Timestamp(f"{DAY} 14:{5 + 5 * i:02d}")} for i, m in enumerate((4, 6, 8))])
+    assert D.now_tile(trips, "160/170/170X", pd.Timestamp(f"{DAY} 14:20")) == ("6 min", "3 trips, 13:20–14:20")
+    assert D.now_tile(trips, "950", pd.Timestamp(f"{DAY} 14:20")) == ("—", "no trips 13:20–14:20")
 
 
 def test_empty_db(tmp_path):

@@ -220,9 +220,10 @@ def now_tile(trips, group, now):
     """'Now': median ride of this group's trips that arrived in the last hour."""
     ok = trips[trips.ok & (trips.group == group)]
     recent = ok[(ok.reached_b > now - timedelta(minutes=60)) & (ok.reached_b <= now)]
+    window = f"{now - timedelta(minutes=60):%H:%M}–{now:%H:%M}"  # the hour before the page was built
     if len(recent):
-        return f"{recent.ride_min.median():.0f} min", f"{len(recent)} trips, last hour"
-    return "—", "no trips in the last hour"
+        return f"{recent.ride_min.median():.0f} min", f"{len(recent)} trips, {window}"
+    return "—", f"no trips {window}"
 
 
 def typical_tile(stats, direction, group, weekday, now):
@@ -487,7 +488,7 @@ function pick(sel, attr, value, save) {{
 const showDir = (d, save) => pick(".dirpage", "dir", d, save);
 const showDay = (d, save) => pick(".day", "day", d, save);
 const showGrp = (d, save) => pick(".grp", "grp", d, save);
-const showTab = d => pick(".panel", "tab", d, false);  // tabs always start on Ride time
+const showTab = d => pick(".panel", "tab", d, false);  // tabs always start on Waiting at the berth
 document.addEventListener("click", e => {{
   const b = e.target.closest("button");
   if (b && b.dataset.dir) showDir(b.dataset.dir, true);
@@ -541,23 +542,22 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
     """One direction's page: a day selector, then per bus the tiles and the Ride time / Waiting tabs for that day."""
     berth, weekday_today = BERTH[direction], pd.Timestamp(today).strftime("%a")
     out = [f"<h2>{PLAN_TITLE}</h2>",
-           '<p class="note">Pick a day. Line: typical for that weekday (last 4 weeks) · band: most trips · public '
-           "holidays left out.</p>",
+           '<p class="note">Select a day to see typical wait (past 4 weeks)</p>',
            f'<div class="days" data-default="{weekday_today}">'
            + "".join(f'<button type="button" data-day="{w}" aria-pressed="false">{w}</button>' for w in WEEKDAYS)
            + "</div>"]
     ok14 = trips14[trips14.ok]
     for group in BUS_ORDER:
         out.append(f'<div class="grp" data-grp="{group_key(group)}">')
-        out.append('<div class="tiles">' + tile_html("Now", *now_tile(trips14, group, pd.Timestamp(now)))
+        out.append('<div class="tiles">' + tile_html("Ride now", *now_tile(trips14, group, pd.Timestamp(now)))
                    + "".join(f'<div class="day" data-day="{w}" hidden>'
-                             + tile_html("Typical", *typical_tile(stats, direction, group, w, now)) + "</div>"
+                             + tile_html("Typical ride", *typical_tile(stats, direction, group, w, now)) + "</div>"
                              for w in WEEKDAYS) + "</div>")
-        out.append('<div class="tabs"><button type="button" data-tab="ride" aria-pressed="true">Ride time</button>'
-                   f'<button type="button" data-tab="wait" aria-pressed="false">Waiting at the {berth} berth</button>'
-                   "</div>")
+        out.append(f'<div class="tabs"><button type="button" data-tab="wait" aria-pressed="true">Waiting at the '
+                   f'{berth} berth</button><button type="button" data-tab="ride" aria-pressed="false">Ride time'
+                   "</button></div>")
         # Ride time: the selected weekday, then the last 14 days
-        out.append(f'<div class="panel" data-tab="ride"><h3>{PROFILE_TITLE}</h3>')
+        out.append(f'<div class="panel" data-tab="ride" hidden><h3>{PROFILE_TITLE}</h3>')
         for w in WEEKDAYS:
             used = dates.get((direction, w), [])
             based = (f"{len(used)} {w} · " + ", ".join(day_label(x)[4:] for x in used)) if used else f"No {w} data yet"
@@ -579,7 +579,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
         seen = ", ".join(x for x in GROUPS[group] if x in DWELL_SERVICES[direction])
         hidden = ", ".join(x for x in GROUPS[group] if x not in DWELL_SERVICES[direction])
         note = "How long the bus waits before leaving" + (f" (bus {seen} only)" if hidden and seen else "") + "."
-        out.append(f'<div class="panel" data-tab="wait" hidden><h3>Waiting at the {berth} berth</h3>'
+        out.append(f'<div class="panel" data-tab="wait"><h3>Waiting at the {berth} berth</h3>'
                    f'<p class="note">{note}</p>')
         for w in WEEKDAYS:
             out.append(f'<div class="day" data-day="{w}" hidden>')
