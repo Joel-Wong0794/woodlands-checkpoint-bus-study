@@ -31,11 +31,12 @@ def test_smoke(tmp_path):
     fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     for text in (D.PROFILE_TITLE, D.HEATMAP_TITLE, "Now", "Typical",
-                 "Bus 160 / 170 / 170X", "Bus 950", "Data quality",
+                 "Bus 160 / 170 / 170X", "Bus 950", "How it's measured",
                  "Waiting at the JB berth"):
         assert text in html, text
     assert "No data yet" not in html
     assert "On the bridge now" not in html  # removed: it could mislead
+    assert "Data quality" not in html  # removed: replaced by a two-sentence note on how it's measured
 
 
 def test_plan_your_day(tmp_path):

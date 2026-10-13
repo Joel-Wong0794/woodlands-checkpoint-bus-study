@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 
 import calendar_flags as C
 import trips as T
-from config import (COLLECT_STOPS, DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
+from config import (DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
                     SERVICE_DAY_START_HOUR, SLOT_MIN)
 
 ROOT = Path(__file__).parent
@@ -236,22 +236,6 @@ def typical_tile(stats, direction, group, weekday, now):
     return "—", f"not enough {weekday} data at {slot} yet"
 
 
-def quality(runs, trips, days):
-    """One row per service-day: polls OK per stop, trips kept/found per direction."""
-    r = runs.assign(day=runs.polled_at.map(service_day))
-    rows = []
-    for day in days:
-        row = {"Day": day_label(day)}
-        for stop in COLLECT_STOPS:
-            x = r[(r.day == day) & (r.stop == stop)]
-            row[f"Polls OK {stop}"] = f"{int(x.ok.sum())}/{len(x)}"
-        for direction, d in DIRECTIONS.items():
-            t = trips[(trips.service_day == day) & (trips.direction == direction)]
-            row[f"{d['name']}: trips kept"] = f"{int(t.ok.sum())}/{len(t)}"
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
 def plan_stats(trips):
     """Ride per direction, weekday, group and slot (special days left out), and the dates behind each direction x weekday."""
     t = typical_trips(trips)
@@ -363,10 +347,6 @@ def fig_html(fig):
                        config={"displayModeBar": False, "responsive": True, "doubleClick": False, "scrollZoom": False})
 
 
-def table_html(df):
-    return df.to_html(index=False, border=0, classes="tbl", float_format=lambda x: f"{x:.0f}")
-
-
 def tile_html(label, value, note):
     return f'<div class="tile"><div class="lbl">{label}</div><div class="val">{value}</div><div class="note">{note}</div></div>'
 
@@ -388,8 +368,6 @@ h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h
 .tile {{ background:var(--tile); border-radius:8px; padding:10px 12px; }}
 .tiles .day:not([hidden]) {{ display:contents; }}
 .lbl {{ font-size:12px; color:var(--ink2); }} .val {{ font-size:24px; font-weight:600; }} .note {{ font-size:12px; }}
-.scroll {{ overflow-x:auto; }} .tbl {{ border-collapse:collapse; font-size:13px; white-space:nowrap; }}
-.tbl th, .tbl td {{ border-bottom:1px solid var(--line); padding:4px 10px; text-align:left; }} .tbl th {{ color:var(--ink2); font-weight:600; }}
 .bar {{ position:sticky; top:0; z-index:5; background:var(--surface); padding:6px 0 2px; }}
 .dirs {{ display:flex; gap:8px; margin:6px 0 6px; }}
 .grps {{ display:flex; gap:6px; margin:0 0 4px; }}
@@ -400,7 +378,6 @@ h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h
 .tabs button {{ flex:1; min-height:40px; border:0; border-bottom:3px solid transparent; background:none; color:var(--ink2);
   font:inherit; cursor:pointer; }}
 .tabs button[aria-pressed="true"] {{ color:var(--ink); border-bottom-color:var(--ink); font-weight:600; }}
-details {{ margin:28px 0 8px; }} summary {{ font-weight:600; cursor:pointer; }}
 .cams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:8px 0 0; }}
 .cam {{ margin:0; }} .cam img {{ width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:8px; background:var(--tile); display:block; }}
 .cam figcaption {{ font-size:12px; color:var(--ink2); margin-top:4px; }}
@@ -430,8 +407,9 @@ dialog.lb::backdrop {{ background:transparent; }}
 <h1>Causeway bus times</h1>
 <div class="sub">{subtitle}</div>
 {body}
-<p class="note">Bus ride only, checkpoint to checkpoint: immigration queues aren't included. From LTA bus GPS
-positions, every minute.</p>
+<p class="note"><b>How it's measured:</b> every minute, LTA's live GPS positions of buses 160, 170, 170X and 950
+are recorded, and each bus is timed from its last position at the boarding checkpoint to its first at the other
+checkpoint. It covers the bus ride only; immigration queues aren't included.</p>
 </main><script>
 const SWAP = {json.dumps(swap)};
 const orig = new Map();
@@ -633,9 +611,6 @@ def build(db_path, now):
                               departures_per_hour(mine, runs, direction),
                               mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today))
         body.append("</section>")
-    quality_trips = all_trips[all_trips.service_day.isin(days)]
-    body.append(f"<details><summary>Data quality</summary><div class='scroll'>"
-                f"{table_html(quality(runs, quality_trips, days))}</div></details>")
     return page("\n".join(body), f"JB ⇄ Singapore checkpoints · updated {now:%H:%M}")
 
 
