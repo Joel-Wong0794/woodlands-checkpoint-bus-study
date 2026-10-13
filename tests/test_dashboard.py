@@ -99,6 +99,15 @@ def test_live_cameras(tmp_path):
     assert "data.gov.sg" in html  # attribution
 
 
+def test_browser_picks_today_and_marks_now(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(5, service="170", first=f"{DAY} 06:00", seed=8), f"{DAY} 05:30", f"{DAY} 09:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 09:00:30"))
+    assert 'timeZone: "Asia/Singapore"' in html  # today and the current hour come from the viewer's clock, in SGT
+    assert "function sgtNow()" in html and "function markNow()" in html
+    assert "showDay(first(\"day\", todayName(), false))" in html  # the weekday isn't restored from a past visit
+
+
 def test_empty_db(tmp_path):
     db = tmp_path / "causeway.db"
     open_db(db).close()

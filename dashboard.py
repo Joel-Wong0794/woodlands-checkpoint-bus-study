@@ -419,12 +419,35 @@ function paint() {{
     Plotly.react(el, recolour(o.data, dark), recolour(o.layout, dark));
   }});
 }}
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paint);
-window.addEventListener("load", paint);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {{ paint(); markNow(); }});
+window.addEventListener("load", () => {{ paint(); markNow(); setInterval(markNow, 60000); }});
 // pick a page (direction), a weekday and a bus; shared across pages, remembered, and can come from the link,
 // e.g. causeway-bus-times#jb-sg,Sat,950
 // Only a tap is remembered (not the default), so a later change of default still reaches returning visitors.
 const KEYS = {{dir: "dir", day: "day", grp: "bus"}};  // "bus": renamed when the default became 160/170/170X
+// Singapore time from the viewer's clock (whatever their timezone): weekday of the service day (before 03:00 counts
+// as the day before) and the hour as a number on the charts' axis (00:00-02:59 plots after 23:00).
+function sgtNow() {{
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {{timeZone: "Asia/Singapore", weekday: "short",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"}}).formatToParts(new Date()).map(x => [x.type, x.value]));
+  const h = +p.hour, m = +p.minute, days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const i = days.indexOf(p.weekday);
+  return {{day: h < {SERVICE_DAY_START_HOUR} ? days[(i + 6) % 7] : days[i],
+          x: h + m / 60 + (h < {SERVICE_DAY_START_HOUR} ? 24 : 0), label: p.hour + ":" + p.minute}};
+}}
+const todayName = () => sgtNow().day;
+// a dotted "now" line on every chart with hours along the bottom
+function markNow() {{
+  const n = sgtNow();
+  document.querySelectorAll(".js-plotly-plot").forEach(el => {{
+    const r = el.layout && el.layout.xaxis && el.layout.xaxis.range;
+    if (!r || r[0] !== 4.5 || n.x < r[0] || n.x > r[1]) return;
+    Plotly.relayout(el, {{shapes: [{{type: "line", xref: "x", yref: "paper", x0: n.x, x1: n.x, y0: 0, y1: 1,
+      line: {{color: "#8a8984", width: 1.5, dash: "dot"}}}}],
+      annotations: [{{x: n.x, xref: "x", y: 1, yref: "paper", text: "now " + n.label, showarrow: false,
+      yanchor: "top", xanchor: "left", xshift: 4, font: {{size: 11, color: "#8a8984"}}}}]}});  // inside, clear of the legend
+  }});
+}}
 function pick(sel, attr, value, save) {{
   document.querySelectorAll(sel).forEach(el => {{ el.hidden = el.dataset[attr] !== value; }});
   document.querySelectorAll(`button[data-${{attr}}]`).forEach(b => b.setAttribute("aria-pressed", b.dataset[attr] === value));
@@ -440,17 +463,17 @@ document.addEventListener("click", e => {{
   if (b && b.dataset.day) showDay(b.dataset.day, true);
   if (b && b.dataset.grp) showGrp(b.dataset.grp, true);
 }});
-function first(attr, fallback) {{
+function first(attr, fallback, useSaved = true) {{
   const ok = v => v && document.querySelector(`[data-${{attr}}="${{v}}"]`);
   const fromLink = location.hash.slice(1).split(",").find(ok);
   let saved = null;
-  try {{ saved = localStorage.getItem(KEYS[attr]); }} catch (e) {{}}
+  if (useSaved) {{ try {{ saved = localStorage.getItem(KEYS[attr]); }} catch (e) {{}} }}
   return fromLink || (ok(saved) ? saved : fallback);
 }}
 const dirBar = document.querySelector(".dirs"), dayBar = document.querySelector(".days"),
   grpBar = document.querySelector(".grps");
 if (dirBar) showDir(first("dir", dirBar.dataset.default));
-if (dayBar) showDay(first("day", dayBar.dataset.default));
+if (dayBar) showDay(first("day", todayName(), false));  // today unless the link names a day
 if (grpBar) showGrp(first("grp", grpBar.dataset.default));
 // live traffic cameras: the latest image of each, refreshed every minute while the page is open
 async function loadCams() {{
