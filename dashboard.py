@@ -442,12 +442,13 @@ details {{ margin:28px 0 8px; }} summary {{ font-weight:600; cursor:pointer; }}
 .cam figcaption {{ font-size:12px; color:var(--ink2); margin-top:4px; }}
 .camopen {{ display:block; width:100%; padding:0; border:0; background:none; cursor:zoom-in; }}
 dialog.lb {{ border:0; padding:0; margin:0; width:100vw; height:100vh; max-width:100vw; max-height:100vh;
-  background:#0b0b0b; color:#fff; overflow:hidden; }}
-dialog.lb::backdrop {{ background:rgba(0,0,0,.6); }}
+  background:rgba(0,0,0,.5); color:#fff; overflow:hidden; }}
+dialog.lb::backdrop {{ background:transparent; }}
 .lb .stage {{ position:absolute; inset:44px 0 60px 0; display:flex; align-items:center; justify-content:center;
   overflow:hidden; touch-action:none; }}
 .lb .stage img {{ max-width:100%; max-height:100%; user-select:none; -webkit-user-drag:none; cursor:grab; }}
-.lb .cap {{ position:absolute; top:12px; left:12px; right:60px; font-size:13px; }}
+.lb .cap {{ position:absolute; top:8px; left:8px; max-width:calc(100% - 76px); font-size:13px;
+  background:rgba(0,0,0,.7); padding:5px 10px; border-radius:6px; }}
 .lb .close {{ position:absolute; top:4px; right:8px; }}
 .lb .tools {{ position:absolute; left:0; right:0; bottom:8px; display:flex; gap:8px; justify-content:center; }}
 .lb button {{ min-width:48px; min-height:44px; border-radius:8px; border:1px solid #555; background:#222; color:#fff;
