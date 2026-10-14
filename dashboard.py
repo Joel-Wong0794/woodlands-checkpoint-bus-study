@@ -343,7 +343,7 @@ def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, he
                                  hovertemplate=f"<b>{weekday} %{{customdata[0]}}</b><br>"
                                                f"Median {what}: %{{y:.0f}} min<br>"
                                                f"From %{{customdata[3]}} {count}<br>"
-                                               "Middle half: %{customdata[1]:.0f}–%{customdata[2]:.0f} min"
+                                               "Usually %{customdata[1]:.0f}–%{customdata[2]:.0f} min"
                                                "<extra></extra>"))
     # best hours: soft bands behind the line, one hour wide
     best = best_slots(stats, direction, weekday, group)
