@@ -322,8 +322,8 @@ def base_layout(fig, height):
     return fig
 
 
-def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, height=300, what="ride",
-            count="trips"):
+def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, height=300,
+            headline="Median ride: %{y:.0f} min", count="trips"):
     """Median by hour for one weekday and bus (shaded: middle half), lines broken at hidden hours; dots = today."""
     key = GROUP_COLOURS[list(GROUPS).index(group)]
     fig = go.Figure()
@@ -341,7 +341,7 @@ def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, he
                                  customdata=list(zip(s.slot.map(slot_label, na_action="ignore"), s.p25, s.p75,
                                                      s.n)),
                                  hovertemplate=f"<b>{weekday} %{{customdata[0]}}</b><br>"
-                                               f"Median {what}: %{{y:.0f}} min<br>"
+                                               f"{headline}<br>"
                                                f"From %{{customdata[3]}} {count}<br>"
                                                "Usually %{customdata[1]:.0f}–%{customdata[2]:.0f} min"
                                                "<extra></extra>"))
@@ -639,16 +639,16 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
         out.append("</div>")
         # Waiting at the berth: the selected weekday
         shown = (direction, group) in GAP_SHOWN
-        note = (f"Minutes between one {group_name(group)} leaving and the next. "
-                "Some buses are missed, so gaps are on the high side." if shown else
+        note = (f"How often a {group_name(group)} leaves (median). "
+                "Some buses are missed, so it's on the high side." if shown else
                 "Not enough departures seen yet to show the gap between buses.")
         out.append(f'<div class="panel" data-tab="wait"><h3>Waiting at the {berth} berth</h3>'
                    f'<p class="note">{note}</p>')
         for w in WEEKDAYS:
             out.append(f'<div class="day" data-day="{w}" hidden>')
             if shown and len(waits[(waits.weekday == w) & (waits.group == group)]):
-                out.append(fig_html(day_fig(waits, direction, w, group, ytitle="gap between buses (min)", height=260,
-                                            what="gap between buses", count="gaps between buses")))
+                out.append(fig_html(day_fig(waits, direction, w, group, ytitle="minutes between buses", height=260,
+                                            headline="A bus every %{y:.0f} min", count="gaps between buses")))
             elif shown:
                 out.append(f'<p class="note">Not enough {w} data yet.</p>')
             if len(deps[(deps.weekday == w) & (deps.group == group)]):
