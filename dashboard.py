@@ -103,15 +103,16 @@ LIGHT = {"surface": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "grid": "#e7
          "weekday": "#2a78d6", "weekend": "#eb6834", "today": "#1baf7a",
          "weekday_band": "rgba(42,120,214,0.16)", "weekend_band": "rgba(235,104,52,0.16)",
          "today_band": "rgba(27,175,122,0.16)", "best_band": "rgba(27,175,122,0.20)",
-         "worst_band": "rgba(214,56,56,0.16)",
+         "worst_band": "rgba(214,56,56,0.16)", "dots": "#7a4fd1",
          "ramp": ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]}
 DARK = {"surface": "#1a1a19", "ink": "#f0efec", "ink2": "#c3c2b7", "grid": "#33322f",
         "weekday": "#3987e5", "weekend": "#d95926", "today": "#199e70",
         "weekday_band": "rgba(57,135,229,0.22)", "weekend_band": "rgba(217,89,38,0.22)",
         "today_band": "rgba(25,158,112,0.22)", "best_band": "rgba(25,158,112,0.30)",
-        "worst_band": "rgba(232,84,84,0.26)",
+        "worst_band": "rgba(232,84,84,0.26)", "dots": "#a183ee",
         "ramp": ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#b7d3f6"]}
-GROUP_COLOURS = ("weekday", "today")  # LIGHT/DARK keys for the 1st and 2nd group in GROUPS
+# LIGHT/DARK keys for the 1st and 2nd group in GROUPS: both blue, clear of the green/red best/worst bands
+GROUP_COLOURS = ("weekday", "weekday")
 
 
 # ---------- Small pure helpers ----------
@@ -368,7 +369,7 @@ def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", 
     has_dots = dots is not None and len(dots) > 0
     if has_dots:
         fig.add_trace(go.Scatter(x=hour_x(dots.left_a), y=dots.ride_min, mode="markers", name="Today",
-                                 marker=dict(size=9, color=LIGHT["weekend"], line=dict(width=2, color=LIGHT["surface"])),
+                                 marker=dict(size=9, color=LIGHT["dots"], line=dict(width=2, color=LIGHT["surface"])),
                                  customdata=list(zip(dots.service, dots.left_a.dt.strftime("%H:%M"))),
                                  hovertemplate="<b>Today, bus %{customdata[0]}</b><br>Left at %{customdata[1]}<br>"
                                                "Ride time across Causeway: %{y:.0f} min<extra></extra>"))

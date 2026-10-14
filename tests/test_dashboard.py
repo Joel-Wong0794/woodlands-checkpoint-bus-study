@@ -179,6 +179,9 @@ def test_best_times_are_shaded():
     assert sorted(sh.x0 for sh in best) == [7, 14, 21]  # the three lowest-median hours, shaded across their hour
     assert all(sh.x1 - sh.x0 == 1 for sh in best)
     assert "Best times" in [t.name for t in fig.data]  # legend entry for the shading
+    for g in ("160/170/170X", "950"):  # both buses: a blue line, apart from the green/red bands
+        f = D.day_fig(stats.assign(group=g), "jb-sg", "Sat", g)
+        assert [t.line.color for t in f.data if t.name == "Typical Sat"] == [D.LIGHT["weekday"]]
     worst = [sh for sh in fig.layout.shapes if sh.name == "worst"]
     assert sorted(sh.x0 for sh in worst) == [6, 13, 20] and "Worst times" in [t.name for t in fig.data]  # red bands
     flat = stats.assign(median=10.0)  # all hours the same: nothing is "best"
