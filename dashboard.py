@@ -509,6 +509,28 @@ const dirBar = document.querySelector(".dirs"), dayBar = document.querySelector(
 if (dirBar) showDir(first("dir", dirBar.dataset.default));
 if (dayBar) showDay(first("day", todayName(), false));  // today unless the link names a day
 if (grpBar) showGrp(first("grp", grpBar.dataset.default));
+{{ const t = first("tab", null, false); if (t) showTab(t); }}  // only set by the reload below
+// a new page is uploaded every 15 min: check every minute (and on return to the tab) whether the file changed, and
+// reload it, keeping the chosen page, bus, tab and any tapped day in the link
+let version = null;
+async function checkNew() {{
+  if (document.hidden || document.querySelector("dialog[open]")) return;
+  let v = null;
+  try {{
+    const r = await fetch(location.pathname, {{method: "HEAD", cache: "no-store"}});
+    v = r.ok && (r.headers.get("etag") || r.headers.get("last-modified"));
+  }} catch (e) {{ return; }}
+  if (!v || version === v) return;
+  if (version === null) {{ version = v; return; }}
+  const on = a => {{ const b = document.querySelector(`button[data-${{a}}][aria-pressed="true"]`); return b ? b.dataset[a] : ""; }};
+  const day = on("day"), tab = on("tab");
+  const keep = [on("dir"), day !== todayName() ? day : "", on("grp"), tab !== "wait" ? tab : ""].filter(Boolean);
+  history.replaceState(null, "", "#" + keep.join(","));
+  location.reload();
+}}
+checkNew();
+setInterval(checkNew, 60000);
+document.addEventListener("visibilitychange", checkNew);
 // live traffic cameras: the latest image of each, refreshed every minute while the page is open
 async function loadCams() {{
   const boxes = document.querySelectorAll(".cam");

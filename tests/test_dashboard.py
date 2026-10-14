@@ -179,6 +179,14 @@ def test_now_line_keeps_the_shading(tmp_path):
     assert 's.name !== "now"' in html  # markNow swaps only its own line, not the best-times bands
 
 
+def test_reloads_when_a_new_page_is_uploaded(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(5, service="170", first=f"{DAY} 06:00", seed=13), f"{DAY} 05:30", f"{DAY} 09:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 09:00:30"))
+    assert 'method: "HEAD"' in html and "location.reload()" in html  # reloads only when the uploaded file changed
+    assert 'first("tab", null, false)' in html  # the open tab survives the reload
+
+
 def test_empty_db(tmp_path):
     db = tmp_path / "causeway.db"
     open_db(db).close()
