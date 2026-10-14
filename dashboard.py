@@ -27,7 +27,6 @@ PROFILE_TITLE = "Ride across Causeway, by hour you leave"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
 PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-DAY_NAMES = dict(zip(WEEKDAYS, ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
 PAGES = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # one page each, in day-trip order
 BERTH = {"jb-sg": "JB", "sg-jb": "Woodlands"}  # where you board
 BUS_ORDER = ("160/170/170X", "950")  # bus toggle order; the first is the default
@@ -246,24 +245,27 @@ def departures_per_hour(trips, runs, direction="jb-sg"):
     return d[cols]
 
 
+def live_window(now):
+    """The hour before the page was built, e.g. '09:30–10:30': the window of the Right now tiles."""
+    return f"{now - timedelta(minutes=60):%H:%M}–{now:%H:%M}"
+
+
 def now_tile(trips, group, now):
-    """'Now': median ride of this group's trips that arrived in the last hour."""
+    """Right now: median ride of this group's trips that reached the alighting stop in the last hour."""
     ok = trips[trips.ok & (trips.group == group)]
     recent = ok[(ok.reached_b > now - timedelta(minutes=60)) & (ok.reached_b <= now)]
-    window = f"{now - timedelta(minutes=60):%H:%M}–{now:%H:%M}"  # the hour before the page was built
     if len(recent):
-        return f"{recent.ride_min.median():.0f} min", f"{len(recent)} trips, {window}"
-    return "—", f"no trips {window}"
+        return f"{recent.ride_min.median():.0f} min", f"from {len(recent)} trips"
+    return "—", "no trips seen"
 
 
-def typical_tile(stats, direction, group, weekday, now, count="trips"):
-    """Median for the selected weekday at the current hour (ride, or the gap between buses)."""
-    slot = pd.Timestamp(now).floor(f"{SLOT_MIN}min").strftime("%H:%M")
-    s = stats[(stats.direction == direction) & (stats.weekday == weekday) & (stats.group == group)
-              & (stats.slot == slot)]
-    if len(s):
-        return f"{s['median'].iloc[0]:.0f} min", f"{slot_label(slot)} · {int(s.n.iloc[0])} {count}"
-    return "—", f"{slot_label(slot)} · not enough data yet"
+def now_gap_tile(departures, group, now):
+    """Right now: median minutes between this group's departures in the last hour (n buses = n - 1 gaps)."""
+    t = pd.to_datetime(departures[departures.group == group].left_a)
+    recent = t[(t > now - timedelta(minutes=60)) & (t <= now)].sort_values()
+    if len(recent) < 2:
+        return "—", "not enough buses seen"
+    return f"{recent.diff().dropna().dt.total_seconds().median() / 60:.0f} min", f"from {len(recent)} buses"
 
 
 def plan_stats(trips):
@@ -430,7 +432,7 @@ details > summary {{ cursor:pointer; color:var(--ink2); font-size:13px; margin:1
 .warn {{ background:var(--tile); border-left:3px solid #d08a1e; padding:8px 10px; border-radius:6px; font-size:13px; }}
 .tiles {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }}
 .tile {{ background:var(--tile); border-radius:8px; padding:10px 12px; }}
-.tiles .day:not([hidden]) {{ display:contents; }}
+.tilehead {{ font-weight:600; margin:14px 0 6px; }}
 .lbl {{ font-size:12px; color:var(--ink2); }} .val {{ font-size:24px; font-weight:600; }} .note {{ font-size:12px; }}
 .bar {{ position:sticky; top:0; z-index:5; background:var(--surface); padding:6px 0 2px; }}
 .dirs {{ display:flex; gap:8px; margin:6px 0 6px; }}
@@ -604,10 +606,17 @@ def load(db_path, since):
     return runs, polls
 
 
-def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
-    """One direction's page: a day selector, then per bus the tiles and the Ride time / Waiting tabs for that day."""
+def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, live_deps):
+    """One direction's page: per bus the Right now tiles, then a day selector and per bus the Waiting / Ride tabs."""
     berth, weekday_today = BERTH[direction], pd.Timestamp(today).strftime("%a")
-    out = [f"<h2>{PLAN_TITLE}</h2>",
+    out = []
+    for group in BUS_ORDER:  # live, so above the day selector (which doesn't change them)
+        gap = (now_gap_tile(live_deps, group, pd.Timestamp(now)) if (direction, group) in GAP_SHOWN
+               else ("—", "not enough data yet"))
+        out.append(f'<div class="grp" data-grp="{group_key(group)}"><p class="tilehead">Right now '
+                   f'({live_window(pd.Timestamp(now))})</p><div class="tiles">' + tile_html("Bus every", *gap)
+                   + tile_html("Ride", *now_tile(trips14, group, pd.Timestamp(now))) + "</div></div>")
+    out += [f"<h2>{PLAN_TITLE}</h2>",
            *([f'<p class="warn">{RIDE_WARNING[direction]}</p>'] if direction in RIDE_WARNING else []),
            '<p class="note">Select a day to see typical wait (past 4 weeks)</p>',
            f'<div class="days" data-default="{weekday_today}">'
@@ -617,14 +626,6 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
     for group in BUS_ORDER:
         out.append(f'<div class="grp" data-grp="{group_key(group)}">')
         shown = (direction, group) in GAP_SHOWN
-        no_gap = ("—", "not enough data yet")
-        out.append('<div class="tiles">'
-                   + "".join(f'<div class="day" data-day="{w}" hidden>'
-                             + tile_html(f"{DAY_NAMES[w]}: bus every",
-                                         *(typical_tile(waits, direction, group, w, now, "gaps") if shown else no_gap))
-                             + tile_html(f"{DAY_NAMES[w]}: ride", *typical_tile(stats, direction, group, w, now))
-                             + "</div>" for w in WEEKDAYS)
-                   + tile_html("Ride now", *now_tile(trips14, group, pd.Timestamp(now))) + "</div>")
         out.append(f'<div class="tabs"><button type="button" data-tab="wait" aria-pressed="true">Waiting at the '
                    f'{berth} berth</button><button type="button" data-tab="ride" aria-pressed="false">Ride across Causeway'
                    "</button></div>")
@@ -708,7 +709,8 @@ def build(db_path, now):
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
         body.append(page_html(direction, plan, plan_dates, bus_gaps(all_deps[direction], T.poll_gaps(runs, direction), direction),
                               departures_per_hour(all_deps[direction], runs, direction),
-                              mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today))
+                              mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today,
+                              all_deps[direction]))
         body.append("</section>")
     return page("\n".join(body), f"JB ⇄ Singapore checkpoints · updated {now:%H:%M}")
 

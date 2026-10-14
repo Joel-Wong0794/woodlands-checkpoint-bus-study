@@ -87,8 +87,8 @@ def test_bus_toggle_defaults_to_160_170_170X(tmp_path):
     assert '<div class="grps" data-default="160-170-170X">' in html
     assert html.index('data-grp="160-170-170X"') < html.index('data-grp="950"')  # 160/170/170X button first
     assert 'grp: "bus"' in html  # new key: an old saved "950" doesn't override the new default
-    # one block per bus on each of the two pages
-    assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') == 2
+    # two blocks per bus (Right now, then the tabs) on each of the two pages
+    assert html.count('class="grp" data-grp="950"') == html.count('class="grp" data-grp="160-170-170X"') == 4
 
 
 def test_live_cameras(tmp_path):
@@ -134,12 +134,15 @@ def test_one_day_selector_drives_everything(tmp_path):
             f"{DAY} 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     jb_sg = html[html.index('<section class="dirpage" data-dir="jb-sg"'):]
+    # Right now (live) sits above the day selector; the per-day tabs below it
+    assert jb_sg.index("Right now") < jb_sg.index('<div class="days"')
+    jb_sg = jb_sg[jb_sg.index('<div class="days"'):]
     block = jb_sg[jb_sg.index('class="grp" data-grp="160-170-170X"'):jb_sg.index('class="grp" data-grp="950"')]
     ride = block[block.index('class="panel" data-tab="ride"'):block.index('class="panel" data-tab="wait"')]
     wait = block[block.index('class="panel" data-tab="wait"'):]
     for part in (ride, wait):  # both tabs have a view per weekday
         assert all(f'class="day" data-day="{d}"' in part for d in D.WEEKDAYS)
-    assert "Typical" in block and block.count('class="day" data-day="Fri"') == 3  # tile, ride, wait
+    assert block.count('class="day" data-day="Fri"') == 2  # ride, wait
     assert "Weekend median" not in html  # the weekday-vs-weekend chart is gone
     assert html.count('<div class="days"') == 2  # one day selector per page
 
@@ -153,11 +156,18 @@ def test_charts_cannot_zoom_but_still_hover():
     assert '"doubleClick": false' in D.fig_html(fig) or '"doubleClick":false' in D.fig_html(fig)
 
 
-def test_ride_now_names_its_hour():
+def test_right_now_tiles():
     trips = pd.DataFrame([{"ok": True, "group": "160/170/170X", "ride_min": m,
                            "reached_b": pd.Timestamp(f"{DAY} 14:{5 + 5 * i:02d}")} for i, m in enumerate((4, 6, 8))])
-    assert D.now_tile(trips, "160/170/170X", pd.Timestamp(f"{DAY} 14:20")) == ("6 min", "3 trips, 13:20–14:20")
-    assert D.now_tile(trips, "950", pd.Timestamp(f"{DAY} 14:20")) == ("—", "no trips 13:20–14:20")
+    now = pd.Timestamp(f"{DAY} 14:20")
+    assert D.live_window(now) == "13:20–14:20"
+    assert D.now_tile(trips, "160/170/170X", now) == ("6 min", "from 3 trips")
+    assert D.now_tile(trips, "950", now) == ("—", "no trips seen")
+    # departures 13:10 (before the window), 13:30, 13:34, 13:44, 14:00 -> gaps 4, 10, 16 -> median 10
+    deps = pd.DataFrame([{"group": "160/170/170X", "left_a": pd.Timestamp(f"{DAY} {t}")}
+                         for t in ("13:10", "13:30", "13:34", "13:44", "14:00")])
+    assert D.now_gap_tile(deps, "160/170/170X", now) == ("10 min", "from 4 buses")
+    assert D.now_gap_tile(deps, "950", now) == ("—", "not enough buses seen")
 
 
 def test_best_times_are_shaded():
@@ -267,16 +277,14 @@ def test_hover_text_names_the_hour_median_and_count(tmp_path):
         assert text in html, text
 
 
-def test_day_tiles_numbers_on_points_and_detail_fold(tmp_path):
+def test_right_now_heading_numbers_on_points_and_detail_fold(tmp_path):
     db = tmp_path / "causeway.db"
     fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=17), f"{DAY} 05:30",
             f"{DAY} 12:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
-    assert "Wednesday: bus every" in html and "Friday: ride" in html  # tiles name the selected day
+    assert "Right now (11:00–12:00)" in html and ">Bus every<" in html and ">Ride<" in html
     assert '"mode":"lines+markers+text"' in html  # each hour's median printed on the chart
     assert html.count("<summary>More detail</summary>") >= 2  # heatmap and buses per hour folded away
-    trips = pd.DataFrame(columns=["direction", "weekday", "group", "slot", "n", "median"])
-    assert D.typical_tile(trips, "jb-sg", "160/170/170X", "Fri", pd.Timestamp(f"{DAY} 13:20")) ==         ("—", "1300–1400hrs · not enough data yet")
 
 
 def test_departures_per_hour():
