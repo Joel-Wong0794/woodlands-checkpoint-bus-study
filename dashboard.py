@@ -23,7 +23,7 @@ DB_PATH = ROOT / "data" / "causeway.db"
 OUT = ROOT / "dashboard.html"
 SGT = ZoneInfo("Asia/Singapore")
 
-PROFILE_TITLE = "Ride time across the Causeway, by the hour you leave"
+PROFILE_TITLE = "Ride across Causeway, by hour you leave"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
 PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -94,8 +94,7 @@ if (lb) {
 # SG -> JB; 950 64 and 76). 950 at JB swings from 24 to 64 a day, so it stays hidden.
 GAP_SHOWN = {("jb-sg", "160/170/170X"), ("sg-jb", "160/170/170X"), ("sg-jb", "950")}
 # A warning at the top of a direction's page while its ride times are known to be off
-RIDE_WARNING = {"sg-jb": "⚠ Ride times here are too low for now: LTA stops showing slow buses partway across the "
-                         "Causeway, so mostly the faster rides are measured. Being fixed."}
+RIDE_WARNING = {"sg-jb": "⚠ Ride times read low: slow buses drop out of LTA data mid-Causeway."}
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
@@ -287,7 +286,8 @@ def best_slots(stats, direction, weekday, group):
 
 
 def best_text(stats, direction, weekday, group):
-    """'Fastest: 15:00 (8 min), ... · Slowest: ...' for one plan chart, or '' with too few hours."""
+    """'Fastest 15:00 (8 min) · Slowest 18:00 (25 min)' for one plan chart, or '' with too few hours.
+    Only the single best and worst hour: the chart's shading marks the other good hours."""
     s = stats[(stats.direction == direction) & (stats.weekday == weekday)].rename(columns={"weekday": "day_type"})
     g = s[(s.group == group) & (s.n >= MIN_TRIPS_PER_SLOT)]
     g = g[g.slot.str[:2].astype(int).between(BEST_HOURS[0], BEST_HOURS[1] - 1)]  # the hours best_worst ranks
@@ -298,7 +298,8 @@ def best_text(stats, direction, weekday, group):
     for kind, label in (("best", "Fastest"), ("worst", "Slowest")):
         rows = bw[bw.kind == kind]
         if len(rows):
-            parts.append(f"{label}: " + ", ".join(f"{r.slot} ({r['median']:.0f} min)" for _, r in rows.iterrows()))
+            r = rows.sort_values("median", ascending=kind == "best").iloc[0]
+            parts.append(f"{label} {r.slot} ({r['median']:.0f} min)")
     return " · ".join(parts)
 
 
@@ -466,8 +467,7 @@ dialog.lb::backdrop {{ background:transparent; }}
 <h1>Causeway bus times</h1>
 <div class="sub">{subtitle}</div>
 {body}
-<p class="note"><b>How it's measured:</b> every minute, LTA's live GPS positions of buses 160, 170, 170X and 950
-are recorded, and each bus is timed from its last position at the boarding checkpoint to the next.</p>
+<p class="note"><b>How it's measured:</b> from LTA live bus GPS, every minute, timed checkpoint to checkpoint.</p>
 </main><script>
 const SWAP = {json.dumps(swap)};
 const orig = new Map();
@@ -639,9 +639,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
         out.append("</div>")
         # Waiting at the berth: the selected weekday
         shown = (direction, group) in GAP_SHOWN
-        note = (f"How often a {group_name(group)} leaves (median). "
-                "Some buses are missed, so it's on the high side." if shown else
-                "Not enough departures seen yet to show the gap between buses.")
+        note = "How often a bus leaves. May read a little high." if shown else "Not enough data yet."
         out.append(f'<div class="panel" data-tab="wait"><h3>Waiting at the {berth} berth</h3>'
                    f'<p class="note">{note}</p>')
         for w in WEEKDAYS:

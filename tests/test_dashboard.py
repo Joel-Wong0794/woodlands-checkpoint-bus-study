@@ -51,7 +51,7 @@ def test_plan_your_day(tmp_path):
     assert 'data-default="Fri"' in html  # opens on today's weekday
     assert "Going to JB" in html and "Returning to Singapore" in html
     assert "No Fri data yet" in html  # only JB -> SG was simulated, so the SG -> JB page says so instead of guessing
-    assert "Fastest:" in html
+    assert "Fastest " in html
 
 
 def test_plan_stats_counts_days_per_weekday_and_direction():
@@ -245,7 +245,7 @@ def test_bus_gaps_shown_only_where_departures_are_well_covered(tmp_path):
     fill_db(db, random_buses(20, service="950", first=f"{DAY} 06:00", headway=(5, 10), seed=14), f"{DAY} 05:30",
             f"{DAY} 12:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
-    assert "Not enough departures seen yet" in html  # 950 JB -> SG left out
+    assert "Not enough data yet." in html  # 950 JB -> SG left out
     assert ("jb-sg", "950") not in D.GAP_SHOWN and ("sg-jb", "160/170/170X") in D.GAP_SHOWN
 
 
@@ -292,7 +292,7 @@ def test_best_text_says_flat_when_differences_are_noise():
                          "median": [17.0], "p25": 15.0, "p75": 18.0})  # outside 06:00-23:00: doesn't count
     assert D.best_text(pd.concat([stats, late]), "sg-jb", "Mon", "160/170/170X").startswith("About the same")
     stats["median"] = [4.0, 3.0, 12.0, 5.0]
-    assert D.best_text(stats, "sg-jb", "Mon", "160/170/170X").startswith("Fastest: 12:00 (3 min)")
+    assert D.best_text(stats, "sg-jb", "Mon", "160/170/170X").startswith("Fastest 12:00 (3 min) · Slowest ")
 
 
 def test_heatmap_labels_mark_public_holidays():
