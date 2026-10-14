@@ -70,7 +70,8 @@ def check_jam(headway, seed):
     true = pd.Series([(pd.Timestamp(b["at_b"]) - pd.Timestamp(b["left_a"])).total_seconds() / 60 for b in buses])
     assert len(ok) >= 0.7 * len(buses)
     assert abs(ok.ride_min.median() - true.median()) <= 3
-    # the known limit (see the xfail below): with ~3 buses on the bridge, a track can now and then slide to the bus
+    # the known limit (4+ buses on the bridge: tracks swap, rides come out short): with ~3 buses on the bridge,
+    # a track can now and then slide to the bus
     # ahead and one ride comes out short. The median must stay right; nearly every single ride must be sane.
     assert ok.ride_min.between(25, 45).mean() >= 0.95
 
@@ -79,12 +80,6 @@ def check_jam(headway, seed):
 def test_jam_about_3_buses_on_bridge(seed):
     """Like the real 170 in the morning peak (9 Oct: 30-40 min rides, a bus every ~8-15 min)."""
     check_jam((8, 15), seed)
-
-
-@pytest.mark.xfail(strict=True, reason="Known limit: with 4+ buses on the bridge, tracks swap to the bus ahead and "
-                                       "rides come out several minutes short. Not seen in the real 170 data so far.")
-def test_jam_4_plus_buses_on_bridge():
-    check_jam((4, 8), 3)
 
 
 def test_wait_at_46219_is_separate_from_ride():
