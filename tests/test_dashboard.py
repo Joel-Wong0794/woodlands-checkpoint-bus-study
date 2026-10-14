@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 
 import dashboard as D
+import trips as T
 from collector import open_db
 from tests.simulate import random_buses, simulate
 
@@ -206,14 +207,36 @@ def test_best_worst():
     assert few[few.kind == "best"].slot.tolist() == ["08:00"] and few[few.kind == "worst"].slot.tolist() == ["10:00"]
 
 
-def test_berth_wait_uses_only_services_with_gps_while_waiting():
-    # 170 has GPS while it waits at 46219; 160/170X only switch it on when they leave, so their "wait" is ignored
-    rows = [{"service": svc, "service_day": DAY, "left_a": pd.Timestamp(f"{DAY} 17:{10 + i}"), "wait_min": w,
-             "ride_min": 10, "ok": True, "day_type": "weekday"}
-            for i, (svc, w) in enumerate((("170", 20), ("170", 22), ("170", 24), ("170X", 1), ("160", 2)))]
-    s = D.berth_wait(pd.DataFrame(rows))
+def next_wait(departures, gaps=(), **extra):
+    rows = [{"service": svc, "group": T.group_of(svc), "service_day": DAY, "left_a": pd.Timestamp(f"{DAY} {t}"),
+             "ok": ok, **extra} for svc, t, ok in departures]
+    g = pd.DataFrame([{"stop": "46219", "gap_from": pd.Timestamp(f"{DAY} {a}"), "gap_to": pd.Timestamp(f"{DAY} {b}")}
+                      for a, b in gaps], columns=["stop", "gap_from", "gap_to"])
+    return D.next_bus_wait(pd.DataFrame(rows), g)
+
+
+def test_next_bus_wait_from_gaps_between_any_bus_of_the_group():
+    # 160, 170X and 170 all count (dropped trips too: they still left). Gaps 10, 2, 6 min from 17:00:
+    # commuters arriving each minute wait 9.5..0.5, 1.5, 0.5, 5.5..0.5 -> 18 waits, median 3.5
+    s = next_wait((("160", "17:00", True), ("170X", "17:10", False), ("170", "17:12", True), ("170", "17:18", True)))
     r = s[(s.group == "160/170/170X") & (s.weekday == "Fri") & (s.slot == "17:00")].iloc[0]
-    assert (r.direction, r.n, r["median"]) == ("jb-sg", 3, 22)
+    assert (r.direction, r.n, r["median"]) == ("jb-sg", 3, 3.5)
+    assert s[s.group == "950"].empty  # another berth
+
+
+def test_next_bus_wait_splits_a_gap_by_the_hour_people_arrive(monkeypatch):
+    # 16:40 -> 17:10: 20 commuters arrive in the 16:00 hour (waits 29.5..10.5), 10 in the 17:00 hour (9.5..0.5)
+    monkeypatch.setattr(D, "MIN_TRIPS_PER_SLOT", 1)
+    s = next_wait((("170", "16:40", True), ("170", "17:10", True)))
+    s = s.set_index("slot")
+    assert s.loc["16:00", "median"] == 20 and s.loc["17:00", "median"] == 5
+
+
+def test_next_bus_wait_skips_polling_gaps_and_special_days():
+    deps = (("170", "17:00", True), ("170", "17:10", True), ("170", "17:20", True), ("170", "17:30", True))
+    assert len(next_wait(deps)) == 1
+    assert next_wait(deps, gaps=[("17:05", "17:09")]).empty  # one gap left -> n = 2, hidden
+    assert next_wait(deps, special="ph_eve").empty
 
 
 def test_departures_per_hour():

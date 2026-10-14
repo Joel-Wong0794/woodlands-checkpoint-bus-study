@@ -89,10 +89,6 @@ if (lb) {
   stage.addEventListener("pointercancel", up);
 }
 """
-# Services with GPS while they wait at the boarding berth. At JB (9-11 Oct data) 160 and 170X only switch it on
-# when they leave, so their measured "wait" is just the last minute or two and is left out. At Woodlands all four
-# report while waiting (12-13 Oct: median waits 8-13 min for every service).
-DWELL_SERVICES = {"jb-sg": ("170", "950"), "sg-jb": ("160", "170", "170X", "950")}
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
@@ -185,11 +181,40 @@ def typical_trips(trips):
     return t
 
 
-def berth_wait(trips, direction="jb-sg"):
-    """How long buses sit at the boarding berth before leaving: median etc. per weekday, group and slot."""
-    t = typical_trips(trips)
-    t = t[t.service.isin(DWELL_SERVICES[direction])]
-    return T.slot_stats(t.assign(ride_min=t.wait_min, direction=direction), by=("direction", "weekday", "group", "slot"))
+def next_bus_wait(trips, gaps, direction="jb-sg"):
+    """A commuter's wait at the berth for the next bus of the group to leave, if they board it (not the queue).
+
+    Between two departures seen of any bus in the group, someone arriving each minute waits until the second one
+    leaves. Those per-minute waits give median, P25 and P75 per weekday, group and hour of arrival; n = gaps between
+    departures in that hour. Departures cover all buses that switch GPS on by the time they leave (dropped trips too:
+    they still left), but a bus never seen leaving makes the gap, and so the wait, too long. Gaps that overlap a
+    polling gap and special days are left out.
+    """
+    cols = ["direction", "weekday", "group", "slot", "n", "median", "p25", "p75"]
+    t = trips[~trips.special.astype(bool)] if "special" in trips else trips
+    if "day_type" in t:
+        t = t[t.day_type != "holiday"]
+    if t.empty:
+        return pd.DataFrame(columns=cols)
+    t = t.assign(left=pd.to_datetime(t.left_a)).sort_values("left")
+    t = t.assign(gap_min=t.groupby(["group", "service_day"]).left.diff().dt.total_seconds() / 60)
+    t = t.assign(start=t.left - pd.to_timedelta(t.gap_min, unit="min")).dropna(subset=["gap_min"])
+    t = t[t.gap_min > 0]
+    gaps = gaps.assign(gap_from=pd.to_datetime(gaps.gap_from), gap_to=pd.to_datetime(gaps.gap_to))
+    t = t[[not any((gaps.gap_from < r.left) & (gaps.gap_to > r.start)) for r in t.itertuples()]]
+    if t.empty:
+        return pd.DataFrame(columns=cols)
+    # one commuter per minute of each gap, arriving mid-minute: waits gap - 0.5, gap - 1.5, ... (mean gap / 2)
+    r = t.loc[t.index.repeat((-(-t.gap_min // 1)).astype(int))]  # ceil(gap) minutes each
+    r = r.assign(offset=r.groupby(level=0).cumcount() + 0.5)
+    r = r[r.offset < r.gap_min]
+    r = r.assign(wait=r.gap_min - r.offset,
+                 slot=(r.start + pd.to_timedelta(r.offset, unit="min")).dt.floor(f"{SLOT_MIN}min").dt.strftime("%H:%M"),
+                 weekday=pd.to_datetime(r.service_day).dt.strftime("%a"), direction=direction, gap=r.left)
+    s = r.groupby(["direction", "weekday", "group", "slot"]).agg(
+        n=("gap", "nunique"), median=("wait", "median"), p25=("wait", lambda x: x.quantile(.25)),
+        p75=("wait", lambda x: x.quantile(.75))).reset_index()
+    return s[s.n >= MIN_TRIPS_PER_SLOT][cols].reset_index(drop=True)
 
 
 def departures_per_hour(trips, runs, direction="jb-sg"):
@@ -599,15 +624,14 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
                    if len(ok14[ok14.group == group]) else '<p class="note">No trips measured yet.</p>')
         out.append("</div>")
         # Waiting at the berth: the selected weekday
-        seen = ", ".join(x for x in GROUPS[group] if x in DWELL_SERVICES[direction])
-        hidden = ", ".join(x for x in GROUPS[group] if x not in DWELL_SERVICES[direction])
-        note = "How long the bus waits before leaving" + (f" (bus {seen} only)" if hidden and seen else "") + "."
+        note = (f"Wait for the next {group_name(group)} to leave, if you board it (not the queue). "
+                "Some buses are missed, so it's on the high side.")
         out.append(f'<div class="panel" data-tab="wait"><h3>Waiting at the {berth} berth</h3>'
                    f'<p class="note">{note}</p>')
         for w in WEEKDAYS:
             out.append(f'<div class="day" data-day="{w}" hidden>')
-            if seen and len(waits[(waits.weekday == w) & (waits.group == group)]):
-                out.append(fig_html(day_fig(waits, direction, w, group, ytitle="bus waits (min)", height=260)))
+            if len(waits[(waits.weekday == w) & (waits.group == group)]):
+                out.append(fig_html(day_fig(waits, direction, w, group, ytitle="wait (min)", height=260)))
             else:
                 out.append(f'<p class="note">Not enough {w} data yet.</p>')
             if len(deps[(deps.weekday == w) & (deps.group == group)]):
@@ -652,7 +676,7 @@ def build(db_path, now):
     for direction, title in PAGES:
         mine = all_trips[all_trips.direction == direction]
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
-        body.append(page_html(direction, plan, plan_dates, berth_wait(mine, direction),
+        body.append(page_html(direction, plan, plan_dates, next_bus_wait(mine, T.poll_gaps(runs, direction), direction),
                               departures_per_hour(mine, runs, direction),
                               mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today))
         body.append("</section>")
