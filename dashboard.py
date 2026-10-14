@@ -714,9 +714,8 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
                    if len(ok14[ok14.group == group]) else '<p class="note">No trips measured yet.</p>')
         out.append("</details></div>")
         # Waiting at the berth: the selected weekday
-        note = "How often a bus leaves. May read a little high." if shown else "Not enough data yet."
         out.append(f'<div class="panel" data-tab="wait"><h3>Waiting at the {berth} berth</h3>'
-                   f'<p class="note">{note}</p>')
+                   + ("" if shown else '<p class="note">Not enough data yet.</p>'))
         for w in WEEKDAYS:
             out.append(f'<div class="day" data-day="{w}" hidden>')
             if shown and len(waits[(waits.weekday == w) & (waits.group == group)]):
