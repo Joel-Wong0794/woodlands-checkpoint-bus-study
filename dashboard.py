@@ -27,6 +27,7 @@ PROFILE_TITLE = "Ride across Causeway, by hour you leave"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
 PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+DAY_NAMES = dict(zip(WEEKDAYS, ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
 PAGES = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # one page each, in day-trip order
 BERTH = {"jb-sg": "JB", "sg-jb": "Woodlands"}  # where you board
 BUS_ORDER = ("160/170/170X", "950")  # bus toggle order; the first is the default
@@ -255,14 +256,14 @@ def now_tile(trips, group, now):
     return "—", f"no trips {window}"
 
 
-def typical_tile(stats, direction, group, weekday, now):
-    """'Typical': median ride for the selected weekday at the current hour."""
+def typical_tile(stats, direction, group, weekday, now, count="trips"):
+    """Median for the selected weekday at the current hour (ride, or the gap between buses)."""
     slot = pd.Timestamp(now).floor(f"{SLOT_MIN}min").strftime("%H:%M")
     s = stats[(stats.direction == direction) & (stats.weekday == weekday) & (stats.group == group)
               & (stats.slot == slot)]
     if len(s):
-        return f"{s['median'].iloc[0]:.0f} min", f"{weekday} {slot} · {int(s.n.iloc[0])} trips"
-    return "—", f"not enough {weekday} data at {slot} yet"
+        return f"{s['median'].iloc[0]:.0f} min", f"{slot_label(slot)} · {int(s.n.iloc[0])} {count}"
+    return "—", f"{slot_label(slot)} · not enough data yet"
 
 
 def plan_stats(trips):
@@ -337,7 +338,9 @@ def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", 
             fig.add_trace(go.Scatter(x=list(seg.x) + list(seg.x[::-1]), y=list(seg.p75) + list(seg.p25[::-1]),
                                      mode="none", fill="toself", fillcolor=LIGHT[f"{key}_band"], hoverinfo="skip",
                                      showlegend=False))
-        fig.add_trace(go.Scatter(x=s.x, y=s["median"], mode="lines+markers", name=f"Typical {weekday}",
+        fig.add_trace(go.Scatter(x=s.x, y=s["median"], mode="lines+markers+text", name=f"Typical {weekday}",
+                                 text=[f"{m:.0f}" if pd.notna(m) else "" for m in s["median"]],
+                                 textposition="top center", textfont=dict(size=10, color=LIGHT["ink"]),
                                  line=dict(width=2, color=LIGHT[key]), marker=dict(size=8, color=LIGHT[key]),
                                  customdata=list(zip(s.slot.map(slot_label, na_action="ignore"), s.p25, s.p75,
                                                      s.n)),
@@ -423,6 +426,7 @@ body {{ margin:0; padding:16px; background:var(--surface); color:var(--ink); fon
 main {{ max-width:980px; margin:0 auto; }}
 h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h3 {{ font-size:14px; margin:18px 0 4px; color:var(--ink2); }}
 .sub, .note {{ color:var(--ink2); }} .sub {{ margin:2px 0 12px; }}
+details > summary {{ cursor:pointer; color:var(--ink2); font-size:13px; margin:14px 0 4px; }}
 .warn {{ background:var(--tile); border-left:3px solid #d08a1e; padding:8px 10px; border-radius:6px; font-size:13px; }}
 .tiles {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }}
 .tile {{ background:var(--tile); border-radius:8px; padding:10px 12px; }}
@@ -488,6 +492,7 @@ function paint() {{
 }}
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {{ paint(); markNow(); }});
 window.addEventListener("load", () => {{ paint(); markNow(); setInterval(markNow, 60000); }});
+document.addEventListener("toggle", () => window.dispatchEvent(new Event("resize")), true);  // charts in a fold
 // pick a page (direction), a weekday and a bus; shared across pages, remembered, and can come from the link,
 // e.g. causeway-bus-times#jb-sg,Sat,950
 // Only a tap is remembered (not the default), so a later change of default still reaches returning visitors.
@@ -611,10 +616,15 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
     ok14 = trips14[trips14.ok]
     for group in BUS_ORDER:
         out.append(f'<div class="grp" data-grp="{group_key(group)}">')
-        out.append('<div class="tiles">' + tile_html("Ride now", *now_tile(trips14, group, pd.Timestamp(now)))
+        shown = (direction, group) in GAP_SHOWN
+        no_gap = ("—", "not enough data yet")
+        out.append('<div class="tiles">'
                    + "".join(f'<div class="day" data-day="{w}" hidden>'
-                             + tile_html("Typical ride", *typical_tile(stats, direction, group, w, now)) + "</div>"
-                             for w in WEEKDAYS) + "</div>")
+                             + tile_html(f"{DAY_NAMES[w]}: bus every",
+                                         *(typical_tile(waits, direction, group, w, now, "gaps") if shown else no_gap))
+                             + tile_html(f"{DAY_NAMES[w]}: ride", *typical_tile(stats, direction, group, w, now))
+                             + "</div>" for w in WEEKDAYS)
+                   + tile_html("Ride now", *now_tile(trips14, group, pd.Timestamp(now))) + "</div>")
         out.append(f'<div class="tabs"><button type="button" data-tab="wait" aria-pressed="true">Waiting at the '
                    f'{berth} berth</button><button type="button" data-tab="ride" aria-pressed="false">Ride across Causeway'
                    "</button></div>")
@@ -633,12 +643,12 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
                 if text:
                     out.append(f'<p class="best">{text}</p>')
             out.append("</div>")
-        out.append(f'<h3>{HEATMAP_TITLE}</h3><p class="note">Darker = longer · ★ public holiday</p>')
+        out.append(f'<details><summary>More detail</summary><h3>{HEATMAP_TITLE}</h3>'
+                   '<p class="note">Darker = longer · ★ public holiday</p>')
         out.append(fig_html(heatmap_fig(ok14, group, days, direction))
                    if len(ok14[ok14.group == group]) else '<p class="note">No trips measured yet.</p>')
-        out.append("</div>")
+        out.append("</details></div>")
         # Waiting at the berth: the selected weekday
-        shown = (direction, group) in GAP_SHOWN
         note = "How often a bus leaves. May read a little high." if shown else "Not enough data yet."
         out.append(f'<div class="panel" data-tab="wait"><h3>Waiting at the {berth} berth</h3>'
                    f'<p class="note">{note}</p>')
@@ -650,8 +660,9 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
             elif shown:
                 out.append(f'<p class="note">Not enough {w} data yet.</p>')
             if len(deps[(deps.weekday == w) & (deps.group == group)]):
-                out.append('<p class="note">Buses seen leaving per hour (at least).</p>')
-                out.append(fig_html(departures_fig(deps, group, w, direction)))
+                out.append('<details><summary>More detail</summary>'
+                           '<p class="note">Buses seen leaving per hour (at least).</p>')
+                out.append(fig_html(departures_fig(deps, group, w, direction)) + "</details>")
             out.append("</div>")
         out.append("</div></div>")  # panel, group
     return "\n".join(out)

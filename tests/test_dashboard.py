@@ -267,6 +267,18 @@ def test_hover_text_names_the_hour_median_and_count(tmp_path):
         assert text in html, text
 
 
+def test_day_tiles_numbers_on_points_and_detail_fold(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=17), f"{DAY} 05:30",
+            f"{DAY} 12:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
+    assert "Wednesday: bus every" in html and "Friday: ride" in html  # tiles name the selected day
+    assert '"mode":"lines+markers+text"' in html  # each hour's median printed on the chart
+    assert html.count("<summary>More detail</summary>") >= 2  # heatmap and buses per hour folded away
+    trips = pd.DataFrame(columns=["direction", "weekday", "group", "slot", "n", "median"])
+    assert D.typical_tile(trips, "jb-sg", "160/170/170X", "Fri", pd.Timestamp(f"{DAY} 13:20")) ==         ("—", "1300–1400hrs · not enough data yet")
+
+
 def test_departures_per_hour():
     # Fri 9 and Fri 16 Oct: 4 + 2 departures at 08:xx, 1 + 0 at 09:xx -> Fri 08:00 = 3/h, 09:00 = 0.5/h.
     # Thu 8 Oct was polled only at 01:xx, so it doesn't count as a day for 08:00 or 09:00.
