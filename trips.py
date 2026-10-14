@@ -167,6 +167,28 @@ def find_trips(tracks):
     return df
 
 
+def find_departures(tracks, direction="jb-sg"):
+    """Buses seen leaving the boarding stop: in each track, the last fix there before a fix on the Causeway (or at the
+    alighting stop) within MAX_LOST_MIN. Unlike find_trips, the bus needn't be seen arriving: LTA drops a bus from
+    the alighting stop's list once its ETA has passed, even mid-Causeway (44% of SG -> JB departures, 13 Oct).
+    """
+    rows = []
+    for tid, g in tracks.sort_values("t").groupby("track"):
+        left = None
+        for r in g.itertuples():
+            if r.at_a:
+                left = r.t
+            elif left is not None and (r.t - left).total_seconds() > MAX_LOST_MIN * 60:
+                left = None
+            elif left is not None and (r.at_b or CAUSEWAY_LAT[0] <= r.lat < CAUSEWAY_LAT[1]):
+                rows.append({"service": r.service, "track": tid, "left_a": left})
+                left = None
+    d = to_frame(rows, ["service", "track", "left_a"])
+    return d.assign(direction=direction, group=d.service.map(group_of),
+                    service_day=(pd.to_datetime(d.left_a) - pd.Timedelta(hours=SERVICE_DAY_START_HOUR))
+                    .dt.strftime("%Y-%m-%d"))
+
+
 # ---------- 4. Gaps and flags ----------
 
 def poll_gaps(poll_runs, direction="jb-sg"):
@@ -225,7 +247,7 @@ def slot_stats(trips, by=("group", "weekday", "slot"), slot_min=SLOT_MIN):
 
 
 def departures_seen(trips, slot_min=SLOT_MIN):
-    """Buses seen leaving the berth per group, service-day and slot (dropped trips included: they still left).
+    """Buses seen leaving the berth per group, service-day and slot (from find_departures, or trips).
 
     A lower bound on the real frequency: buses without GPS when they leave are invisible.
     """

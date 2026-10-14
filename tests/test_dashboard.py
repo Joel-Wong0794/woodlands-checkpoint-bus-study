@@ -245,8 +245,15 @@ def test_bus_gaps_shown_only_where_departures_are_well_covered(tmp_path):
     fill_db(db, random_buses(20, service="950", first=f"{DAY} 06:00", headway=(5, 10), seed=14), f"{DAY} 05:30",
             f"{DAY} 12:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
-    assert "Not enough departures seen yet" in html  # 950 (and SG -> JB) left out
-    assert ("jb-sg", "160/170/170X") in D.GAP_SHOWN
+    assert "Not enough departures seen yet" in html  # 950 JB -> SG left out
+    assert ("jb-sg", "950") not in D.GAP_SHOWN and ("sg-jb", "160/170/170X") in D.GAP_SHOWN
+
+
+def test_sg_jb_ride_warning(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(5, service="170", first=f"{DAY} 06:00", seed=15), f"{DAY} 05:30", f"{DAY} 09:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 09:00:30"))
+    assert html.count('class="warn"') == 1 and D.RIDE_WARNING["sg-jb"] in html  # SG -> JB page only
 
 
 def test_departures_per_hour():

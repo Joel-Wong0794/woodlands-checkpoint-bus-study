@@ -89,9 +89,13 @@ if (lb) {
   stage.addEventListener("pointercancel", up);
 }
 """
-# Where enough departures are seen to show the gap between buses (13 Oct snapshot: JB -> SG 160/170/170X ~100
-# a day; 950 and SG -> JB far fewer, so their gaps came out much too long)
-GAP_SHOWN = {("jb-sg", "160/170/170X")}
+# Where enough departures are seen to show the gap between buses. The same buses shuttle both ways, so each
+# direction should see about as many as the other (13 Oct snapshot, Mon 12 Oct: 160/170/170X 145 JB -> SG, 114
+# SG -> JB; 950 64 and 76). 950 at JB swings from 24 to 64 a day, so it stays hidden.
+GAP_SHOWN = {("jb-sg", "160/170/170X"), ("sg-jb", "160/170/170X"), ("sg-jb", "950")}
+# A warning at the top of a direction's page while its ride times are known to be off
+RIDE_WARNING = {"sg-jb": "⚠ Ride times here are too low for now: LTA stops showing slow buses partway across the "
+                         "Causeway, so mostly the faster rides are measured. Being fixed."}
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
@@ -184,16 +188,16 @@ def typical_trips(trips):
     return t
 
 
-def bus_gaps(trips, gaps, direction="jb-sg"):
+def bus_gaps(departures, gaps, direction="jb-sg"):
     """Minutes between one bus of the group leaving the berth and the next (any of e.g. 160/170/170X).
 
     Median, P25, P75 per weekday, group and hour the earlier bus left; n = gaps in that hour. Two buses leaving in the
-    same minute give a 0-min gap. Departures cover all buses that switch GPS on by the time they leave (dropped trips
-    too: they still left), but a bus never seen leaving merges two gaps into one long one. Gaps that overlap a
+    same minute give a 0-min gap. `departures` (T.find_departures) cover every bus that has GPS on by the time it
+    leaves, arrival seen or not, but a bus never seen leaving merges two gaps into one long one. Gaps that overlap a
     polling gap and special days are left out.
     """
     cols = ["direction", "weekday", "group", "slot", "n", "median", "p25", "p75"]
-    t = trips[~trips.special.astype(bool)] if "special" in trips else trips
+    t = departures[~departures.special.astype(bool)] if "special" in departures else departures
     if "day_type" in t:
         t = t[t.day_type != "holiday"]
     if t.empty:
@@ -405,6 +409,7 @@ body {{ margin:0; padding:16px; background:var(--surface); color:var(--ink); fon
 main {{ max-width:980px; margin:0 auto; }}
 h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h3 {{ font-size:14px; margin:18px 0 4px; color:var(--ink2); }}
 .sub, .note {{ color:var(--ink2); }} .sub {{ margin:2px 0 12px; }}
+.warn {{ background:var(--tile); border-left:3px solid #d08a1e; padding:8px 10px; border-radius:6px; font-size:13px; }}
 .tiles {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }}
 .tile {{ background:var(--tile); border-radius:8px; padding:10px 12px; }}
 .tiles .day:not([hidden]) {{ display:contents; }}
@@ -585,6 +590,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
     """One direction's page: a day selector, then per bus the tiles and the Ride time / Waiting tabs for that day."""
     berth, weekday_today = BERTH[direction], pd.Timestamp(today).strftime("%a")
     out = [f"<h2>{PLAN_TITLE}</h2>",
+           *([f'<p class="warn">{RIDE_WARNING[direction]}</p>'] if direction in RIDE_WARNING else []),
            '<p class="note">Select a day to see typical wait (past 4 weeks)</p>',
            f'<div class="days" data-default="{weekday_today}">'
            + "".join(f'<button type="button" data-day="{w}" aria-pressed="false">{w}</button>' for w in WEEKDAYS)
@@ -657,6 +663,10 @@ def build(db_path, now):
     all_trips["day_type"] = all_trips.service_day.map(day_type)
     all_trips["special"] = all_trips.service_day.map(special_day)
     plan, plan_dates = plan_stats(all_trips)
+    # departures: every bus seen leaving onto the Causeway, arrival seen or not (feeds the Waiting tab)
+    all_deps = {d: T.find_departures(all_tracks[d], d) for d in DIRECTIONS}
+    for dep in all_deps.values():
+        dep["day_type"], dep["special"] = dep.service_day.map(day_type), dep.service_day.map(special_day)
 
     body = ['<div class="bar"><div class="dirs" data-default="sg-jb">'
             + "".join(f'<button type="button" data-dir="{d}" aria-pressed="false">{title}'
@@ -673,8 +683,8 @@ def build(db_path, now):
     for direction, title in PAGES:
         mine = all_trips[all_trips.direction == direction]
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
-        body.append(page_html(direction, plan, plan_dates, bus_gaps(mine, T.poll_gaps(runs, direction), direction),
-                              departures_per_hour(mine, runs, direction),
+        body.append(page_html(direction, plan, plan_dates, bus_gaps(all_deps[direction], T.poll_gaps(runs, direction), direction),
+                              departures_per_hour(all_deps[direction], runs, direction),
                               mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today))
         body.append("</section>")
     return page("\n".join(body), f"JB ⇄ Singapore checkpoints · updated {now:%H:%M}")

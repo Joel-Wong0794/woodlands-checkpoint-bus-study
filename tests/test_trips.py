@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from tests.simulate import random_buses, simulate
-from trips import day_quality, departures_seen, gps_points, link_tracks, measure_trips, poll_gaps, slot_stats
+from trips import day_quality, departures_seen, find_departures, gps_points, link_tracks, measure_trips, poll_gaps, slot_stats
 
 DAY = "2026-10-09"
 
@@ -414,6 +414,21 @@ def test_slot_stats_pools_a_group_not_950():
 def test_measure_trips_adds_group():
     trips = run([bus("10:00", "10:02", "10:20", service="950"), bus("11:00", "11:02", "11:20")])
     assert sorted(trips.group) == ["160/170/170X", "950"]
+
+
+def test_find_departures_needs_no_arrival():
+    # (track, time, lat, at_a, at_b). JB -> SG: board zone north of 1.4645, the Causeway 1.4475-1.4645
+    fixes = [("A", "08:00", 1.4655, True, False), ("A", "08:01", 1.4652, True, False),
+             ("A", "08:02", 1.4600, False, False),                                   # left, then vanished: counts
+             ("B", "08:05", 1.4655, True, False), ("B", "08:20", 1.4655, True, False),  # never left
+             ("C", "08:10", 1.4655, True, False), ("C", "08:30", 1.4600, False, False),  # next fix 20 min later
+             ("D", "09:00", 1.4655, True, False), ("D", "09:03", 1.4550, False, False),
+             ("D", "09:10", 1.4470, False, True), ("D", "09:40", 1.4655, True, False)]  # a trip, then back at JB
+    tracks = pd.DataFrame([{"track": k, "service": "170", "t": pd.Timestamp(f"{DAY} {t}"), "lat": lat, "at_a": a,
+                            "at_b": b} for k, t, lat, a, b in fixes])
+    d = find_departures(tracks)
+    assert sorted(zip(d.track, d.left_a.dt.strftime("%H:%M"))) == [("A", "08:01"), ("D", "09:00")]
+    assert set(d.group) == {"160/170/170X"} and set(d.service_day) == {DAY} and set(d.direction) == {"jb-sg"}
 
 
 def test_departures_seen():
