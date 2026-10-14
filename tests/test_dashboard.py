@@ -46,7 +46,7 @@ def test_plan_your_day(tmp_path):
             f"{DAY} 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     assert D.PLAN_TITLE in html
-    assert "Select a day to see typical wait (past 4 weeks)" in html
+    assert "Select a day and hour to see typical wait (past 4 weeks)" in html
     assert all(f'data-day="{d}"' in html for d in D.WEEKDAYS)
     assert 'data-default="Fri"' in html  # opens on today's weekday
     assert "Going to JB" in html and "Returning to Singapore" in html
