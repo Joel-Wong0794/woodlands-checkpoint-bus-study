@@ -27,6 +27,7 @@ PROFILE_TITLE = "Ride across Causeway, by hour you leave"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
 PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+DAY_NAMES = dict(zip(WEEKDAYS, ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
 PAGES = (("sg-jb", "Going to JB"), ("jb-sg", "Returning to Singapore"))  # one page each, in day-trip order
 BERTH = {"jb-sg": "JB", "sg-jb": "Woodlands"}  # where you board
 BUS_ORDER = ("160/170/170X", "950")  # bus toggle order; the first is the default
@@ -433,6 +434,8 @@ details > summary {{ cursor:pointer; color:var(--ink2); font-size:13px; margin:1
 .tiles {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }}
 .tile {{ background:var(--tile); border-radius:8px; padding:10px 12px; }}
 .tilehead {{ font-weight:600; margin:14px 0 6px; }}
+.hourpick {{ display:block; margin:10px 0 0; color:var(--ink2); }}
+.hourpick select {{ font:inherit; color:var(--ink); background:var(--tile); border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin-left:6px; }}
 .lbl {{ font-size:12px; color:var(--ink2); }} .val {{ font-size:24px; font-weight:600; }} .note {{ font-size:12px; }}
 .bar {{ position:sticky; top:0; z-index:5; background:var(--surface); padding:6px 0 2px; }}
 .dirs {{ display:flex; gap:8px; margin:6px 0 6px; }}
@@ -492,8 +495,8 @@ function paint() {{
     Plotly.react(el, recolour(o.data, dark), recolour(o.layout, dark));
   }});
 }}
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {{ paint(); markNow(); }});
-window.addEventListener("load", () => {{ paint(); markNow(); setInterval(markNow, 60000); }});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {{ paint(); markNow(); markHour(); }});
+window.addEventListener("load", () => {{ paint(); markNow(); markHour(); setInterval(markNow, 60000); }});
 document.addEventListener("toggle", () => window.dispatchEvent(new Event("resize")), true);  // charts in a fold
 // pick a page (direction), a weekday and a bus; shared across pages, remembered, and can come from the link,
 // e.g. causeway-bus-times#jb-sg,Sat,950
@@ -525,6 +528,18 @@ function markNow() {{
       yanchor: "top", xanchor: "left", xshift: 4, font: {{size: 11, color: "#8a8984"}}}}]}});  // inside, clear of the legend
   }});
 }}
+// the chosen hour (dropdown under the day buttons): a light band on every hourly chart
+function markHour() {{
+  let x = +hour;
+  if (x < {SERVICE_DAY_START_HOUR}) x += 24;
+  document.querySelectorAll(".js-plotly-plot").forEach(el => {{
+    const r = el.layout && el.layout.xaxis && el.layout.xaxis.range;
+    if (!r || r[0] !== 4.5) return;
+    const shapes = (el.layout.shapes || []).filter(s => s.name !== "hour");
+    Plotly.relayout(el, {{shapes: [...shapes, {{name: "hour", type: "rect", xref: "x", yref: "paper", x0: x, x1: x + 1,
+      y0: 0, y1: 1, layer: "below", fillcolor: "rgba(128,128,128,0.18)", line: {{width: 0}}}}]}});
+  }});
+}}
 function pick(sel, attr, value, save) {{
   document.querySelectorAll(sel).forEach(el => {{ el.hidden = el.dataset[attr] !== value; }});
   document.querySelectorAll(`button[data-${{attr}}]`).forEach(b => b.setAttribute("aria-pressed", b.dataset[attr] === value));
@@ -538,7 +553,7 @@ const showTab = d => pick(".panel", "tab", d, false);  // tabs always start on W
 document.addEventListener("click", e => {{
   const b = e.target.closest("button");
   if (b && b.dataset.dir) showDir(b.dataset.dir, true);
-  if (b && b.dataset.day) showDay(b.dataset.day, true);
+  if (b && b.dataset.day) {{ showDay(b.dataset.day, true); showTypical(); }}
   if (b && b.dataset.grp) showGrp(b.dataset.grp, true);
   if (b && b.dataset.tab) showTab(b.dataset.tab);
 }});
@@ -555,6 +570,35 @@ if (dirBar) showDir(first("dir", dirBar.dataset.default));
 if (dayBar) showDay(first("day", todayName(), false));  // today unless the link names a day
 if (grpBar) showGrp(first("grp", grpBar.dataset.default));
 {{ const t = first("tab", null, false); if (t) showTab(t); }}  // only set by the reload below
+// Typical <day>, <hour>: the current SGT hour unless the link names one (e.g. #jb-sg,Sat,18); not remembered
+const DAYS = {json.dumps(DAY_NAMES)};
+const TYPICAL = {{}};
+document.querySelectorAll("script.typical").forEach(s => {{ TYPICAL[s.dataset.dir] = JSON.parse(s.textContent); }});
+const hourOk = h => document.querySelector(`.hours option[value="${{h}}"]`);
+function hourNow() {{
+  const h = String(Math.floor(sgtNow().x) % 24).padStart(2, "0");
+  return hourOk(h) ? h : "05";  // 02:00-04:59: no buses, show the first hour
+}}
+let hour = location.hash.slice(1).split(",").find(v => /^\d\d$/.test(v) && hourOk(v)) || hourNow();
+function showTypical() {{
+  const b = document.querySelector('button[data-day][aria-pressed="true"]'), day = b ? b.dataset.day : todayName();
+  document.querySelectorAll(".hours").forEach(s => {{ s.value = hour; }});
+  const label = hourOk(hour) ? hourOk(hour).textContent : "";
+  document.querySelectorAll(".typ").forEach(box => {{
+    const v = (TYPICAL[box.dataset.tdir] || {{}})[`${{box.dataset.tgrp}}|${{day}}|${{hour}}`] || [null, 0, null, 0];
+    box.querySelector(".tilehead").textContent = `Typical ${{DAYS[day]}}, ${{label}}`;
+    const tiles = box.querySelectorAll(".tile");
+    [[v[0], v[1], "buses"], [v[2], v[3], "trips"]].forEach(([m, n, what], i) => {{
+      tiles[i].querySelector(".val").textContent = m === null ? "—" : `${{Math.round(m)}} min`;
+      tiles[i].querySelector(".note").textContent = m === null ? "not enough data yet" : `from ${{n}} ${{what}}`;
+    }});
+  }});
+  if (window.Plotly) markHour();
+}}
+document.addEventListener("change", e => {{
+  if (e.target.matches(".hours")) {{ hour = e.target.value; showTypical(); }}
+}});
+showTypical();
 // a new page is uploaded every 15 min: check every minute (and on return to the tab) whether the file changed, and
 // reload it, keeping the chosen page, bus, tab and any tapped day in the link
 let version = null;
@@ -569,7 +613,8 @@ async function checkNew() {{
   if (version === null) {{ version = v; return; }}
   const on = a => {{ const b = document.querySelector(`button[data-${{a}}][aria-pressed="true"]`); return b ? b.dataset[a] : ""; }};
   const day = on("day"), tab = on("tab");
-  const keep = [on("dir"), day !== todayName() ? day : "", on("grp"), tab !== "wait" ? tab : ""].filter(Boolean);
+  const keep = [on("dir"), day !== todayName() ? day : "", on("grp"), tab !== "wait" ? tab : "",
+                hour !== hourNow() ? hour : ""].filter(Boolean);
   history.replaceState(null, "", "#" + keep.join(","));
   location.reload();
 }}
@@ -606,6 +651,20 @@ def load(db_path, since):
     return runs, polls
 
 
+def typical_data(direction, stats, waits):
+    """{'<grp key>|<weekday>|<HH>': [gap median, buses, ride median, trips]} for the Typical tiles (None = no data).
+    Gaps only where GAP_SHOWN; both use the same hidden-slot rule as the charts (n >= MIN_TRIPS_PER_SLOT)."""
+    out = {}
+    for frame, i in ((waits, 0), (stats, 2)):
+        f = frame[frame.direction == direction] if "direction" in frame else frame
+        for r in f.itertuples():
+            if i == 0 and (direction, r.group) not in GAP_SHOWN:
+                continue
+            row = out.setdefault(f"{group_key(r.group)}|{r.weekday}|{r.slot[:2]}", [None] * 4)
+            row[i:i + 2] = [round(float(r.median), 1), int(r.n)]
+    return out
+
+
 def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, live_deps):
     """One direction's page: per bus the Right now tiles, then a day selector and per bus the Waiting / Ride tabs."""
     berth, weekday_today = BERTH[direction], pd.Timestamp(today).strftime("%a")
@@ -618,13 +677,22 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
                    + tile_html("Ride", *now_tile(trips14, group, pd.Timestamp(now))) + "</div></div>")
     out += [f"<h2>{PLAN_TITLE}</h2>",
            *([f'<p class="warn">{RIDE_WARNING[direction]}</p>'] if direction in RIDE_WARNING else []),
-           '<p class="note">Select a day to see typical wait (past 4 weeks)</p>',
+           '<p class="note">Select a day and hour to see typical wait (past 4 weeks)</p>',
            f'<div class="days" data-default="{weekday_today}">'
            + "".join(f'<button type="button" data-day="{w}" aria-pressed="false">{w}</button>' for w in WEEKDAYS)
-           + "</div>"]
+           + "</div>",
+           '<label class="hourpick">Hour <select class="hours">'
+           + "".join(f'<option value="{h % 24:02d}">{h % 24:02d}:00–{(h + 1) % 24:02d}:00</option>' for h in HOURS)
+           + "</select></label>",
+           f'<script type="application/json" class="typical" data-dir="{direction}">'
+           f"{json.dumps(typical_data(direction, stats, waits), separators=(',', ':'))}</script>"]
     ok14 = trips14[trips14.ok]
     for group in BUS_ORDER:
         out.append(f'<div class="grp" data-grp="{group_key(group)}">')
+        # Typical <day>, <hour>: filled in by the page script from the JSON above
+        out.append(f'<div class="typ" data-tdir="{direction}" data-tgrp="{group_key(group)}">'
+                   '<p class="tilehead"></p><div class="tiles">' + tile_html("Bus every", "—", "")
+                   + tile_html("Ride", "—", "") + "</div></div>")
         shown = (direction, group) in GAP_SHOWN
         out.append(f'<div class="tabs"><button type="button" data-tab="wait" aria-pressed="true">Waiting at the '
                    f'{berth} berth</button><button type="button" data-tab="ride" aria-pressed="false">Ride across Causeway'

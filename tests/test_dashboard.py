@@ -287,6 +287,24 @@ def test_right_now_heading_numbers_on_points_and_detail_fold(tmp_path):
     assert html.count("<summary>More detail</summary>") >= 2  # heatmap and buses per hour folded away
 
 
+def test_hour_filter_and_typical_tiles(tmp_path):
+    stats = pd.DataFrame([{"direction": "jb-sg", "weekday": "Sat", "group": g, "slot": "18:00", "n": 5, "median": m}
+                          for g, m in (("160/170/170X", 12.4), ("950", 20))])
+    waits = pd.DataFrame([{"direction": "jb-sg", "weekday": "Sat", "group": g, "slot": "18:00", "n": 7, "median": m}
+                          for g, m in (("160/170/170X", 6), ("950", 15))])
+    d = D.typical_data("jb-sg", stats, waits)
+    assert d["160-170-170X|Sat|18"] == [6.0, 7, 12.4, 5]
+    assert d["950|Sat|18"] == [None, None, 20.0, 5]  # 950's gap isn't shown JB -> SG
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=18), f"{DAY} 05:30",
+            f"{DAY} 12:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
+    assert html.count('<select class="hours">') == 2  # one per page
+    assert '<option value="23">23:00–00:00</option>' in html and '<option value="05">' in html
+    assert html.count('class="typ" data-tdir=') == 4  # per bus, per page
+    assert "function showTypical()" in html and "function markHour()" in html
+
+
 def test_departures_per_hour():
     # Fri 9 and Fri 16 Oct: 4 + 2 departures at 08:xx, 1 + 0 at 09:xx -> Fri 08:00 = 3/h, 09:00 = 0.5/h.
     # Thu 8 Oct was polled only at 01:xx, so it doesn't count as a day for 08:00 or 09:00.
