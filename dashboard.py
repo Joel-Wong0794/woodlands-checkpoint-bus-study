@@ -23,7 +23,7 @@ DB_PATH = ROOT / "data" / "causeway.db"
 OUT = ROOT / "dashboard.html"
 SGT = ZoneInfo("Asia/Singapore")
 
-PROFILE_TITLE = "Ride time by the hour you leave"
+PROFILE_TITLE = "Ride time across the Causeway, by the hour you leave"
 HEATMAP_TITLE = f"Last {DASH_DAYS} days by hour"
 PLAN_TITLE = "Plan your day"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -322,8 +322,8 @@ def base_layout(fig, height):
     return fig
 
 
-def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, height=300,
-            headline="Median ride: %{y:.0f} min", count="trips"):
+def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", dots=None, height=300,
+            headline="Median ride time across Causeway: %{y:.0f} min", count="trips"):
     """Median by hour for one weekday and bus (shaded: middle half), lines broken at hidden hours; dots = today."""
     key = GROUP_COLOURS[list(GROUPS).index(group)]
     fig = go.Figure()
@@ -361,7 +361,7 @@ def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, he
                                  marker=dict(size=9, color=LIGHT["weekend"], line=dict(width=2, color=LIGHT["surface"])),
                                  customdata=list(zip(dots.service, dots.left_a.dt.strftime("%H:%M"))),
                                  hovertemplate="<b>Today, bus %{customdata[0]}</b><br>Left at %{customdata[1]}<br>"
-                                               "Ride: %{y:.0f} min<extra></extra>"))
+                                               "Ride time across Causeway: %{y:.0f} min<extra></extra>"))
     fig.update_yaxes(title_text=ytitle, rangemode="tozero")
     fig.update_xaxes(title_text=f"time the bus left the {BERTH[direction]} checkpoint")
     fig.update_layout(showlegend=has_dots or bool(best))
@@ -391,7 +391,7 @@ def heatmap_fig(ok, group, days, direction="jb-sg"):
                                colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)], zmin=0,
                                colorbar=dict(title=dict(text="min", font=dict(color=LIGHT["ink2"])), thickness=10,
                                              tickfont=dict(color=LIGHT["ink2"])),
-                               hovertemplate="<b>%{y}, %{customdata[1]}</b><br>Median ride: %{z:.0f} min<br>"
+                               hovertemplate="<b>%{y}, %{customdata[1]}</b><br>Median ride time across Causeway: %{z:.0f} min<br>"
                                              "From %{customdata[0]} trips<extra></extra>"))
     fig.update_yaxes(autorange="reversed", showgrid=False)
     fig.update_xaxes(showgrid=False, title_text=f"hour the bus left the {BERTH[direction]} checkpoint")
@@ -616,7 +616,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
                              + tile_html("Typical ride", *typical_tile(stats, direction, group, w, now)) + "</div>"
                              for w in WEEKDAYS) + "</div>")
         out.append(f'<div class="tabs"><button type="button" data-tab="wait" aria-pressed="true">Waiting at the '
-                   f'{berth} berth</button><button type="button" data-tab="ride" aria-pressed="false">Ride time'
+                   f'{berth} berth</button><button type="button" data-tab="ride" aria-pressed="false">Ride across Causeway'
                    "</button></div>")
         # Ride time: the selected weekday, then the last 14 days
         out.append(f'<div class="panel" data-tab="ride" hidden><h3>{PROFILE_TITLE}</h3>')

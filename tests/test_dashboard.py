@@ -262,7 +262,7 @@ def test_hover_text_names_the_hour_median_and_count(tmp_path):
     fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=16), f"{DAY} 05:30",
             f"{DAY} 12:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
-    for text in ("Median ride: ", "From %{customdata[3]} trips", "A bus every %{y:.0f} min",
+    for text in ("Median ride time across Causeway: ", "From %{customdata[3]} trips", "A bus every %{y:.0f} min",
                  "From %{customdata[3]} gaps between buses", "At least %{y:.1f} buses left"):
         assert text in html, text
 
