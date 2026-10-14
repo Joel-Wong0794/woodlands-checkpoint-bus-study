@@ -94,8 +94,6 @@ if (lb) {
 # direction should see about as many as the other (13 Oct snapshot, Mon 12 Oct: 160/170/170X 145 JB -> SG, 114
 # SG -> JB; 950 64 and 76). 950 at JB swings from 24 to 64 a day, so it stays hidden.
 GAP_SHOWN = {("jb-sg", "160/170/170X"), ("sg-jb", "160/170/170X"), ("sg-jb", "950")}
-# A warning at the top of a direction's page while its ride times are known to be off
-RIDE_WARNING = {"sg-jb": "⚠ Ride times read low: slow buses drop out of LTA data mid-Causeway."}
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
@@ -430,7 +428,6 @@ main {{ max-width:980px; margin:0 auto; }}
 h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h3 {{ font-size:14px; margin:18px 0 4px; color:var(--ink2); }}
 .sub, .note {{ color:var(--ink2); }} .sub {{ margin:2px 0 12px; }}
 details > summary {{ cursor:pointer; color:var(--ink2); font-size:13px; margin:14px 0 4px; }}
-.warn {{ background:var(--tile); border-left:3px solid #d08a1e; padding:8px 10px; border-radius:6px; font-size:13px; }}
 .tiles {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }}
 .tile {{ background:var(--tile); border-radius:8px; padding:10px 12px; }}
 .tilehead {{ font-weight:600; margin:14px 0 6px; }}
@@ -676,7 +673,6 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
                    f'({live_window(pd.Timestamp(now))})</p><div class="tiles">' + tile_html("Bus every", *gap)
                    + tile_html("Ride", *now_tile(trips14, group, pd.Timestamp(now))) + "</div></div>")
     out += [f"<h2>{PLAN_TITLE}</h2>",
-           *([f'<p class="warn">{RIDE_WARNING[direction]}</p>'] if direction in RIDE_WARNING else []),
            '<p class="note">Select a day and hour to see typical wait (past 4 weeks)</p>',
            f'<div class="days" data-default="{weekday_today}">'
            + "".join(f'<button type="button" data-day="{w}" aria-pressed="false">{w}</button>' for w in WEEKDAYS)

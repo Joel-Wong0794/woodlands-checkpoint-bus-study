@@ -259,13 +259,6 @@ def test_bus_gaps_shown_only_where_departures_are_well_covered(tmp_path):
     assert ("jb-sg", "950") not in D.GAP_SHOWN and ("sg-jb", "160/170/170X") in D.GAP_SHOWN
 
 
-def test_sg_jb_ride_warning(tmp_path):
-    db = tmp_path / "causeway.db"
-    fill_db(db, random_buses(5, service="170", first=f"{DAY} 06:00", seed=15), f"{DAY} 05:30", f"{DAY} 09:00")
-    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 09:00:30"))
-    assert html.count('class="warn"') == 1 and D.RIDE_WARNING["sg-jb"] in html  # SG -> JB page only
-
-
 def test_hover_text_names_the_hour_median_and_count(tmp_path):
     assert D.slot_label("13:00") == "1300–1400hrs" and D.slot_label("23:00") == "2300–0000hrs"
     db = tmp_path / "causeway.db"
