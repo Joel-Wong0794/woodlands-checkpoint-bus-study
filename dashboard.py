@@ -145,6 +145,12 @@ def heat_label(day):
     return f"{day_label(day)} ★" if f["sg_ph"] or f["my_ph"] else day_label(day)
 
 
+def slot_label(slot):
+    """'13:00' -> '1300–1400hrs' (the slot and the SLOT_MIN after it), for hover text."""
+    start = datetime.strptime(slot, "%H:%M")
+    return f"{start:%H%M}–{start + timedelta(minutes=SLOT_MIN):%H%M}hrs"
+
+
 def hour_x(t):
     """Hour of day as a number on the service-day axis: 00:00-02:59 plots after 23:00."""
     t = pd.to_datetime(t)
@@ -316,7 +322,8 @@ def base_layout(fig, height):
     return fig
 
 
-def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, height=300):
+def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, height=300, what="ride",
+            count="trips"):
     """Median by hour for one weekday and bus (shaded: middle half), lines broken at hidden hours; dots = today."""
     key = GROUP_COLOURS[list(GROUPS).index(group)]
     fig = go.Figure()
@@ -331,10 +338,13 @@ def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, he
                                      showlegend=False))
         fig.add_trace(go.Scatter(x=s.x, y=s["median"], mode="lines+markers", name=f"Typical {weekday}",
                                  line=dict(width=2, color=LIGHT[key]), marker=dict(size=8, color=LIGHT[key]),
-                                 customdata=s[["slot", "p25", "p75", "n"]],
-                                 hovertemplate=f"{weekday} %{{customdata[0]}}: median %{{y:.0f}} min<br>"
-                                               "middle half %{customdata[1]:.0f}-%{customdata[2]:.0f}, "
-                                               "%{customdata[3]} trips<extra></extra>"))
+                                 customdata=list(zip(s.slot.map(slot_label, na_action="ignore"), s.p25, s.p75,
+                                                     s.n)),
+                                 hovertemplate=f"<b>{weekday} %{{customdata[0]}}</b><br>"
+                                               f"Median {what}: %{{y:.0f}} min<br>"
+                                               f"From %{{customdata[3]}} {count}<br>"
+                                               "Middle half: %{customdata[1]:.0f}–%{customdata[2]:.0f} min"
+                                               "<extra></extra>"))
     # best hours: soft bands behind the line, one hour wide
     best = best_slots(stats, direction, weekday, group)
     for slot in best:
@@ -350,7 +360,8 @@ def day_fig(stats, direction, weekday, group, ytitle="ride (min)", dots=None, he
         fig.add_trace(go.Scatter(x=hour_x(dots.left_a), y=dots.ride_min, mode="markers", name="Today",
                                  marker=dict(size=9, color=LIGHT["weekend"], line=dict(width=2, color=LIGHT["surface"])),
                                  customdata=list(zip(dots.service, dots.left_a.dt.strftime("%H:%M"))),
-                                 hovertemplate="bus %{customdata[0]} left %{customdata[1]}: %{y:.0f} min<extra></extra>"))
+                                 hovertemplate="<b>Today, bus %{customdata[0]}</b><br>Left at %{customdata[1]}<br>"
+                                               "Ride: %{y:.0f} min<extra></extra>"))
     fig.update_yaxes(title_text=ytitle, rangemode="tozero")
     fig.update_xaxes(title_text=f"time the bus left the {BERTH[direction]} checkpoint")
     fig.update_layout(showlegend=has_dots or bool(best))
@@ -361,8 +372,9 @@ def departures_fig(deps, group, weekday, direction="jb-sg"):
     d = deps[(deps.group == group) & (deps.weekday == weekday)]
     colour = LIGHT[GROUP_COLOURS[list(GROUPS).index(group)]]
     fig = go.Figure(go.Bar(x=hour_x(pd.to_datetime(d.slot, format="%H:%M")) + SLOT_MIN / 120, y=d.per_hour, width=0.7,
-                           marker=dict(color=colour), showlegend=False,
-                           hovertemplate=f"{weekday} %{{x:.0f}}h: at least %{{y:.1f}} buses<extra></extra>"))
+                           marker=dict(color=colour), showlegend=False, customdata=d.slot.map(slot_label),
+                           hovertemplate=f"<b>{weekday} %{{customdata}}</b><br>"
+                                         "At least %{y:.1f} buses left<extra></extra>"))
     fig.update_yaxes(title_text="buses per hour", rangemode="tozero")
     fig.update_xaxes(title_text=f"hour the bus left the {BERTH[direction]} checkpoint")
     return base_layout(fig, 220)
@@ -372,14 +384,15 @@ def heatmap_fig(ok, group, days, direction="jb-sg"):
     t = ok[ok.group == group].assign(h=lambda d: hour_x(d.left_a).astype(int))
     agg = t.groupby(["service_day", "h"]).ride_min.agg(["median", "size"])
     z = [[agg["median"].get((d, h)) for h in HOURS] for d in days]
-    n = [[int(agg["size"].get((d, h), 0)) for h in HOURS] for d in days]
+    n = [[[int(agg["size"].get((d, h), 0)), slot_label(f"{h % 24:02d}:00")] for h in HOURS] for d in days]
     labels = [heat_label(d) for d in days]
     ramp = LIGHT["ramp"]
-    fig = go.Figure(go.Heatmap(x=[h + 0.5 for h in HOURS], y=labels, z=z, customdata=n, xgap=2, ygap=2,
+    fig = go.Figure(go.Heatmap(x=[h + 0.5 for h in HOURS], y=labels, z=z, customdata=n, xgap=2, ygap=2, hoverongaps=False,
                                colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)], zmin=0,
                                colorbar=dict(title=dict(text="min", font=dict(color=LIGHT["ink2"])), thickness=10,
                                              tickfont=dict(color=LIGHT["ink2"])),
-                               hovertemplate="%{y} %{x:.0f}h: median %{z:.0f} min (%{customdata} trips)<extra></extra>"))
+                               hovertemplate="<b>%{y}, %{customdata[1]}</b><br>Median ride: %{z:.0f} min<br>"
+                                             "From %{customdata[0]} trips<extra></extra>"))
     fig.update_yaxes(autorange="reversed", showgrid=False)
     fig.update_xaxes(showgrid=False, title_text=f"hour the bus left the {BERTH[direction]} checkpoint")
     return base_layout(fig, 90 + 24 * len(days))
@@ -634,7 +647,8 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today):
         for w in WEEKDAYS:
             out.append(f'<div class="day" data-day="{w}" hidden>')
             if shown and len(waits[(waits.weekday == w) & (waits.group == group)]):
-                out.append(fig_html(day_fig(waits, direction, w, group, ytitle="gap between buses (min)", height=260)))
+                out.append(fig_html(day_fig(waits, direction, w, group, ytitle="gap between buses (min)", height=260,
+                                            what="gap between buses", count="gaps between buses")))
             elif shown:
                 out.append(f'<p class="note">Not enough {w} data yet.</p>')
             if len(deps[(deps.weekday == w) & (deps.group == group)]):

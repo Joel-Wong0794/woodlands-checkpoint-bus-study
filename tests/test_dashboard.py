@@ -256,6 +256,17 @@ def test_sg_jb_ride_warning(tmp_path):
     assert html.count('class="warn"') == 1 and D.RIDE_WARNING["sg-jb"] in html  # SG -> JB page only
 
 
+def test_hover_text_names_the_hour_median_and_count(tmp_path):
+    assert D.slot_label("13:00") == "1300–1400hrs" and D.slot_label("23:00") == "2300–0000hrs"
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=16), f"{DAY} 05:30",
+            f"{DAY} 12:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
+    for text in ("Median ride: ", "From %{customdata[3]} trips", "Median gap between buses: ",
+                 "From %{customdata[3]} gaps between buses", "At least %{y:.1f} buses left"):
+        assert text in html, text
+
+
 def test_departures_per_hour():
     # Fri 9 and Fri 16 Oct: 4 + 2 departures at 08:xx, 1 + 0 at 09:xx -> Fri 08:00 = 3/h, 09:00 = 0.5/h.
     # Thu 8 Oct was polled only at 01:xx, so it doesn't count as a day for 08:00 or 09:00.
