@@ -103,11 +103,13 @@ LIGHT = {"surface": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "grid": "#e7
          "weekday": "#2a78d6", "weekend": "#eb6834", "today": "#1baf7a",
          "weekday_band": "rgba(42,120,214,0.16)", "weekend_band": "rgba(235,104,52,0.16)",
          "today_band": "rgba(27,175,122,0.16)", "best_band": "rgba(27,175,122,0.20)",
+         "worst_band": "rgba(214,56,56,0.16)",
          "ramp": ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]}
 DARK = {"surface": "#1a1a19", "ink": "#f0efec", "ink2": "#c3c2b7", "grid": "#33322f",
         "weekday": "#3987e5", "weekend": "#d95926", "today": "#199e70",
         "weekday_band": "rgba(57,135,229,0.22)", "weekend_band": "rgba(217,89,38,0.22)",
         "today_band": "rgba(25,158,112,0.22)", "best_band": "rgba(25,158,112,0.30)",
+        "worst_band": "rgba(232,84,84,0.26)",
         "ramp": ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#b7d3f6"]}
 GROUP_COLOURS = ("weekday", "today")  # LIGHT/DARK keys for the 1st and 2nd group in GROUPS
 
@@ -276,15 +278,15 @@ def plan_stats(trips):
     return stats, dates
 
 
-def best_slots(stats, direction, weekday, group):
-    """The slots to shade as best (lowest medians, as named by best_text), or [] when the hours are within the noise."""
+def best_slots(stats, direction, weekday, group, kind="best"):
+    """The slots to shade as best (lowest medians) or worst (kind="worst"), or [] when the hours are within the noise."""
     s = stats[(stats.direction == direction) & (stats.weekday == weekday)].rename(columns={"weekday": "day_type"})
     g = s[(s.group == group) & (s.n >= MIN_TRIPS_PER_SLOT)]
     g = g[g.slot.str[:2].astype(int).between(BEST_HOURS[0], BEST_HOURS[1] - 1)]
     if g.empty or g["median"].max() - g["median"].min() < MIN_SPREAD_MIN:
         return []
     bw = best_worst(s, group)
-    return list(bw[bw.kind == "best"].slot)
+    return list(bw[bw.kind == kind].slot)
 
 
 def best_text(stats, direction, weekday, group):
@@ -350,16 +352,19 @@ def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", 
                                                f"From %{{customdata[3]}} {count}<br>"
                                                "Usually %{customdata[1]:.0f}–%{customdata[2]:.0f} min"
                                                "<extra></extra>"))
-    # best hours: soft bands behind the line, one hour wide
-    best = best_slots(stats, direction, weekday, group)
-    for slot in best:
-        h = int(slot[:2])
-        x0 = h + 24 if h < SERVICE_DAY_START_HOUR else h
-        fig.add_shape(type="rect", xref="x", yref="paper", x0=x0, x1=x0 + 1, y0=0, y1=1, layer="below",
-                      fillcolor=LIGHT["best_band"], line=dict(width=0), name="best")
-    if best:  # shapes have no legend entry of their own
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="Best times", hoverinfo="skip",
-                                 marker=dict(symbol="square", size=12, color=LIGHT["best_band"])))
+    # best (green) and worst (red) hours: soft bands behind the line, one hour wide
+    best = []
+    for kind, label in (("best", "Best times"), ("worst", "Worst times")):
+        slots = best_slots(stats, direction, weekday, group, kind)
+        best += slots
+        for slot in slots:
+            h = int(slot[:2])
+            x0 = h + 24 if h < SERVICE_DAY_START_HOUR else h
+            fig.add_shape(type="rect", xref="x", yref="paper", x0=x0, x1=x0 + 1, y0=0, y1=1, layer="below",
+                          fillcolor=LIGHT[f"{kind}_band"], line=dict(width=0), name=kind)
+        if slots:  # shapes have no legend entry of their own
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=label, hoverinfo="skip",
+                                     marker=dict(symbol="square", size=12, color=LIGHT[f"{kind}_band"])))
     has_dots = dots is not None and len(dots) > 0
     if has_dots:
         fig.add_trace(go.Scatter(x=hour_x(dots.left_a), y=dots.ride_min, mode="markers", name="Today",
