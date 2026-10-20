@@ -475,12 +475,25 @@ dialog.lb::backdrop {{ background:transparent; }}
   color:var(--ink); font:inherit; cursor:pointer; }}
 .days button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
 .best {{ font-size:13px; margin:2px 0 10px; }}
+.reload {{ position:fixed; right:14px; bottom:14px; z-index:20; display:flex; align-items:center; gap:8px;
+  padding:6px 12px 6px 6px; border:1px solid var(--line); border-radius:999px; background:var(--tile); color:var(--ink);
+  font:inherit; font-size:13px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.15); }}
+.reload[hidden] {{ display:none; }}
+.reload svg {{ width:32px; height:32px; transform:rotate(-90deg); }}
+.reload circle {{ fill:none; stroke-width:3; }}
+.reload .track {{ stroke:var(--line); }} .reload .ring {{ stroke:var(--ink); stroke-linecap:round; stroke-dasharray:88;
+  stroke-dashoffset:0; }}
+.reload.go .ring {{ transition:stroke-dashoffset 5s linear; stroke-dashoffset:88; }}
+.reload b {{ position:absolute; left:6px; width:32px; text-align:center; font-size:12px; }}
 </style></head><body><main>
 <h1>Causeway bus times</h1>
 <div class="sub">{subtitle}</div>
 {body}
 <p class="note"><b>How it's measured:</b> from LTA live bus GPS, every minute, timed checkpoint to checkpoint.</p>
-</main><script>
+</main>
+<button class="reload" hidden aria-live="polite" title="Tap to update now"><svg viewBox="0 0 32 32">
+<circle class="track" cx="16" cy="16" r="14"/><circle class="ring" cx="16" cy="16" r="14"/></svg><b>5</b>New data, updating…</button>
+<script>
 const SWAP = {json.dumps(swap)};
 const orig = new Map();
 function recolour(x, dark) {{
@@ -619,7 +632,21 @@ async function checkNew() {{
   const keep = [on("dir"), day !== todayName() ? day : "", on("grp"), tab !== "wait" ? tab : "",
                 hour !== hourNow() ? hour : ""].filter(Boolean);
   history.replaceState(null, "", "#" + keep.join(","));
-  location.reload();
+  countdown(5);
+}}
+// a small ring that drains for a few seconds before the reload; tap it to reload now
+function countdown(sec) {{
+  const box = document.querySelector(".reload");
+  if (!box || !box.hidden) {{ if (!box) location.reload(); return; }}
+  const num = box.querySelector("b");
+  box.hidden = false;
+  num.textContent = sec;
+  requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add("go")));
+  box.onclick = () => location.reload();
+  const t = setInterval(() => {{
+    num.textContent = --sec;
+    if (sec <= 0) {{ clearInterval(t); location.reload(); }}
+  }}, 1000);
 }}
 checkNew();
 setInterval(checkNew, 60000);
