@@ -675,7 +675,9 @@ def load(db_path, since):
     con = sqlite3.connect(db_path, timeout=30)
     try:
         runs = pd.read_sql("SELECT polled_at, stop, ok FROM poll_runs WHERE polled_at >= ?", con, params=(since,))
-        polls = pd.read_sql("SELECT * FROM polls WHERE polled_at >= ?", con, params=(since,))
+        # only what trips.gps_points uses (GPS rows, 5 columns): SELECT * ran the e2-micro out of memory (22 Oct)
+        polls = pd.read_sql("SELECT polled_at, stop, service, lat, lon FROM polls "
+                            "WHERE polled_at >= ? AND lat IS NOT NULL AND lon IS NOT NULL", con, params=(since,))
     finally:
         con.close()
     return runs, polls
