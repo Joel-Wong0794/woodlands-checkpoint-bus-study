@@ -1,4 +1,8 @@
 """Project settings. See CLAUDE.md section 6."""
+# Big picture: every tunable number lives here, so the rules of the method can be read (and changed) in one place.
+# The other files import from this one; nothing here does any work by itself.
+
+# ---------- Stops and buses ----------
 
 STOP_A = "46219"  # JB Checkpoint (start)
 STOP_B = "46109"  # Woodlands Checkpoint (end)
@@ -28,15 +32,20 @@ STOP_COORDS = {
     "46211": (1.465696, 103.767509),  # Johor Bahru Checkpt (11 Oct)
 }
 
+# ---------- Polling ----------
+
 GAP_SEC = 180              # polls further apart than this are a gap
 POLL_SEC = 60              # the collector polls once a minute (cron); used to correct times for the polling
 
+# ---------- Where a bus "is" ----------
 # Stage 3 measures trips from GPS tracks (LTA's ETAs proved unreliable across the border).
 # The Causeway as a latitude band between the two checkpoint areas. Buses only turn round outside it.
+# (Latitude grows going north: Woodlands is ~1.446, JB checkpoint ~1.465.)
 CAUSEWAY_LAT = (1.4475, 1.4645)
 
 # Each direction: where you board and alight, and how a GPS fix counts as "at" each stop:
 # within <stop>_m metres of the stop AND inside the latitude bounds.
+# (The latitude bounds stop a bus on the Causeway from counting as "at" a stop just because it is within the radius.)
 DIRECTIONS = {
     "jb-sg": {
         "name": "JB → Singapore", "board": STOP_A, "alight": STOP_B,
@@ -54,17 +63,21 @@ DIRECTIONS = {
     },
 }
 
+# ---------- Joining GPS fixes into tracks (trips.link_tracks) ----------
+# How far can a bus have moved since we last saw it? 25 m/s x seconds since then + 200 m, but never more than 2.5 km.
 MAX_SPEED_MS = 25          # a bus can't move faster than this (~90 km/h) between fixes...
 LINK_SLACK_M = 200         # ...plus this much GPS noise
 MAX_LINK_M = 2500          # never link fixes further apart than this (the crossing is ~2 km)
 BACK_M = 150              # on the Causeway a track can't move this far against its direction (buses don't U-turn there)
 MAX_LOST_MIN = 15          # a track survives this long without a fix (buses drop off the list and come back)
 BLIND_FLAG_MIN = 5         # a ride with a longer stretch without fixes is flagged (time less precise)
+
+# ---------- Trips and statistics ----------
 SLOT_MIN = 60              # slot size for stats; hourly until there are enough weeks of data
 
 MIN_TRIP_MIN = 2           # on the corrected ride: drops exactly the trips the old 3-min floor on measured rides did
 MAX_TRIP_MIN = 240
-SERVICE_DAY_START_HOUR = 3
-DASH_DAYS = 14
+SERVICE_DAY_START_HOUR = 3  # a "service day" runs 03:00 -> 02:59, so a 00:40 bus counts with the evening before it
+DASH_DAYS = 14             # the "last 14 days" heatmap
 PLAN_DAYS = 28             # "Plan your day" window: 4 of each weekday
-MIN_TRIPS_PER_SLOT = 3
+MIN_TRIPS_PER_SLOT = 3     # an hour with fewer rides (or gaps) than this is hidden: too little data to trust

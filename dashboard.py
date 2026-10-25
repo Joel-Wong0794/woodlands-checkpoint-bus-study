@@ -2,6 +2,15 @@
 
 Everything is recomputed from the raw polls in the window: polls -> trips (trips.py) -> tiles, charts, tables.
 """
+# Big picture: cron runs this every 15 min. main() -> build():
+#   1. load:            read the last 4 weeks of raw polls from the database (only the columns needed);
+#   2. trips.py:        turn GPS fixes into bus tracks, then into rides and departures, for both directions;
+#   3. calculations:    typical ride and gap between buses per weekday x hour (median + middle half), the
+#                       "Right now" figures for the last hour, best/worst hours;
+#   4. figures + page:  Plotly charts, assembled into ONE static HTML file (dashboard.html), which cron uploads
+#                       to the public bucket. There is no web server: the phone just downloads that file.
+# The page holds every weekday, direction and bus pre-built; a little JavaScript in the page only shows/hides them
+# when buttons are tapped. The file reads top to bottom: settings, small helpers, calculations, figures, page.
 import json
 import sqlite3
 import time
@@ -17,6 +26,8 @@ import calendar_flags as C
 import trips as T
 from config import (DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_SLOT, PLAN_DAYS,
                     SERVICE_DAY_START_HOUR, SLOT_MIN)
+
+# ---------- Settings and text ----------
 
 ROOT = Path(__file__).parent
 DB_PATH = ROOT / "data" / "causeway.db"
@@ -203,19 +214,23 @@ def bus_gaps(departures, gaps, direction="jb-sg"):
     leaves, arrival seen or not, but a bus never seen leaving merges two gaps into one long one. Gaps that overlap a
     polling gap and special days are left out.
     """
+    # This is the "A bus every N min" figure. Example: departures 08:04, 08:10, 08:10, 08:25 -> gaps 6, 0, 15.
     cols = ["direction", "weekday", "group", "slot", "n", "median", "p25", "p75"]
     t = departures[~departures.special.astype(bool)] if "special" in departures else departures
     if "day_type" in t:
         t = t[t.day_type != "holiday"]
     if t.empty:
         return pd.DataFrame(columns=cols)
+    # sort the departures, then gap = this departure - the previous one of the same group on the same service day
     t = t.assign(left=pd.to_datetime(t.left_a)).sort_values("left")
     t = t.assign(gap_min=t.groupby(["group", "service_day"]).left.diff().dt.total_seconds() / 60)
     t = t.assign(start=t.left - pd.to_timedelta(t.gap_min, unit="min")).dropna(subset=["gap_min"])
+    # drop gaps that span a stretch when we weren't polling: buses may have left unseen in between
     gaps = gaps.assign(gap_from=pd.to_datetime(gaps.gap_from), gap_to=pd.to_datetime(gaps.gap_to))
     t = t[[not any((gaps.gap_from < r.left) & (gaps.gap_to > r.start)) for r in t.itertuples()]]
     if t.empty:
         return pd.DataFrame(columns=cols)
+    # each gap counts in the hour the earlier bus left; then median and middle half per weekday x hour (n >= 3)
     s = t.assign(weekday=pd.to_datetime(t.service_day).dt.strftime("%a"), direction=direction,
                  slot=t.start.dt.floor(f"{SLOT_MIN}min").dt.strftime("%H:%M"))
     s = s.groupby(["direction", "weekday", "group", "slot"]).gap_min.agg(
@@ -272,6 +287,8 @@ def now_gap_tile(departures, group, now):
 
 def plan_stats(trips):
     """Ride per direction, weekday, group and slot (special days left out), and the dates behind each direction x weekday."""
+    # This is the "typical ride": e.g. every good ride on a normal Saturday leaving 18:00-19:00 in the last 4 weeks
+    # -> median 9 min, usually 7-12 min. `dates` lists which Saturdays went into it (shown under the chart).
     t = typical_trips(trips)
     stats = T.slot_stats(t, by=("direction", "weekday", "group", "slot"))
     t = t.assign(weekday=pd.to_datetime(t.service_day).dt.strftime("%a"))
@@ -309,6 +326,8 @@ def best_text(stats, direction, weekday, group):
 
 
 # ---------- Figures ----------
+# Plotly charts. They are drawn in the LIGHT colours; the page script swaps in the DARK ones when the phone is in
+# dark mode. All charts share base_layout: x axis = hour of the day from 05:00 to 01:00, no zooming.
 
 def base_layout(fig, height):
     fig.update_layout(height=height, margin=dict(l=44, r=12, t=8, b=36), paper_bgcolor=LIGHT["surface"],
@@ -331,17 +350,21 @@ def base_layout(fig, height):
 def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", dots=None, height=300,
             headline="Median ride time across Causeway: %{y:.0f} min", count="trips"):
     """Median by hour for one weekday and bus (shaded: middle half), lines broken at hidden hours; dots = today."""
+    # Used for both the ride chart and the gap-between-buses chart: same shape, different numbers and wording.
     key = GROUP_COLOURS[list(GROUPS).index(group)]
     fig = go.Figure()
     s = stats[(stats.direction == direction) & (stats.weekday == weekday) & (stats.group == group)].copy()
     if len(s):
+        # put every hour on the axis (empty where hidden), plot each point in the middle of its hour
         s["x"] = hour_x(pd.to_datetime(s.slot, format="%H:%M")) + SLOT_MIN / 120
         s = s.set_index("x").reindex([h + SLOT_MIN / 120 for h in HOURS]).rename_axis("x").reset_index()
         run = s["median"].isna().cumsum()  # contiguous stretches of shown slots share a number
+        # the shaded band (P25-P75 = middle half of rides), drawn piece by piece so it breaks at hidden hours
         for _, seg in s[s["median"].notna()].groupby(run):
             fig.add_trace(go.Scatter(x=list(seg.x) + list(seg.x[::-1]), y=list(seg.p75) + list(seg.p25[::-1]),
                                      mode="none", fill="toself", fillcolor=LIGHT[f"{key}_band"], hoverinfo="skip",
                                      showlegend=False))
+        # the median line, with each hour's value printed on its point and details on hover/tap
         fig.add_trace(go.Scatter(x=s.x, y=s["median"], mode="lines+markers+text", name=f"Typical {weekday}",
                                  text=[f"{m:.0f}" if pd.notna(m) else "" for m in s["median"]],
                                  textposition="top center", textfont=dict(size=10, color=LIGHT["ink"]),
@@ -366,6 +389,7 @@ def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", 
         if slots:  # shapes have no legend entry of their own
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=label, hoverinfo="skip",
                                      marker=dict(symbol="square", size=12, color=LIGHT[f"{kind}_band"])))
+    # today's individual rides as purple dots, to compare with the typical line
     has_dots = dots is not None and len(dots) > 0
     if has_dots:
         fig.add_trace(go.Scatter(x=hour_x(dots.left_a), y=dots.ride_min, mode="markers", name="Today",
@@ -410,8 +434,11 @@ def heatmap_fig(ok, group, days, direction="jb-sg"):
 
 
 # ---------- Page ----------
+# Turning figures and numbers into HTML. page() below holds the page's CSS and JavaScript (buttons, dark mode,
+# auto-reload when a new build is uploaded); page_html() fills in one direction; build() puts it all together.
 
 def fig_html(fig):
+    # one chart as an HTML snippet; plotly.js itself is loaded once by page(), not repeated per chart
     return fig.to_html(full_html=False, include_plotlyjs=False,
                        config={"displayModeBar": False, "responsive": True, "doubleClick": False, "scrollZoom": False})
 
@@ -672,6 +699,7 @@ setInterval(loadCams, 60000);
 
 
 def load(db_path, since):
+    # poll_runs (every API call, to find polling gaps) and the GPS rows of polls, from `since` onwards
     con = sqlite3.connect(db_path, timeout=30)
     try:
         runs = pd.read_sql("SELECT polled_at, stop, ok FROM poll_runs WHERE polled_at >= ?", con, params=(since,))
@@ -686,6 +714,8 @@ def load(db_path, since):
 def typical_data(direction, stats, waits):
     """{'<grp key>|<weekday>|<HH>': [gap median, buses, ride median, trips]} for the Typical tiles (None = no data).
     Gaps only where GAP_SHOWN; both use the same hidden-slot rule as the charts (n >= MIN_TRIPS_PER_SLOT)."""
+    # A small lookup table written into the page as JSON. When you pick a day and hour, the page script reads
+    # e.g. '160-170-170X|Sat|18' and fills the "Typical Saturday, 18:00" tiles, with no server involved.
     out = {}
     for frame, i in ((waits, 0), (stats, 2)):
         f = frame[frame.direction == direction] if "direction" in frame else frame
@@ -699,6 +729,9 @@ def typical_data(direction, stats, waits):
 
 def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, live_deps):
     """One direction's page: per bus the Right now tiles, then a day selector and per bus the Waiting / Ride tabs."""
+    # Layout, top to bottom: "Right now" tiles -> Plan your day (day buttons, hour picker) -> per bus: Typical
+    # tiles, then two tabs: Waiting (gap between buses) and Ride across Causeway. Everything for all 7 weekdays and
+    # both buses is written out here, marked with data-day / data-grp; the page script shows the selected ones.
     berth, weekday_today = BERTH[direction], pd.Timestamp(today).strftime("%a")
     out = []
     for group in BUS_ORDER:  # live, so above the day selector (which doesn't change them)
@@ -769,6 +802,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
 
 def build(db_path, now):
     """The whole page as HTML. `now` is naive Singapore time."""
+    # Step 1: load the last PLAN_DAYS (28) service days of raw data
     today = service_day(now)
     plan_days = [(pd.Timestamp(today) - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(PLAN_DAYS)]
     runs, polls = load(db_path, f"{plan_days[-1]} {SERVICE_DAY_START_HOUR:02d}:00:00")
@@ -778,18 +812,21 @@ def build(db_path, now):
     first = service_day(runs.polled_at.min())
     days = [d for d in plan_days[:DASH_DAYS] if d >= first]  # newest first
 
+    # Step 2: GPS fixes -> tracks -> trips, for each direction (trips.py), then mark holidays and special days
     # both directions over the plan window (4 weeks); the heatmap and "Now" use the last DASH_DAYS
     all_tracks = {d: T.link_tracks(T.gps_points(polls, direction=d)) for d in DIRECTIONS}
     found = [T.check_trips(T.find_trips(all_tracks[d]), T.poll_gaps(runs, d), d) for d in DIRECTIONS]
     all_trips = pd.concat([f for f in found if len(f)] or found[:1], ignore_index=True)
     all_trips["day_type"] = all_trips.service_day.map(day_type)
     all_trips["special"] = all_trips.service_day.map(special_day)
+    # Step 3: typical rides per weekday x hour, and departure times for the gap between buses
     plan, plan_dates = plan_stats(all_trips)
     # departures: every bus seen leaving onto the Causeway, arrival seen or not (feeds the Waiting tab)
     all_deps = {d: T.find_departures(all_tracks[d], d) for d in DIRECTIONS}
     for dep in all_deps.values():
         dep["day_type"], dep["special"] = dep.service_day.map(day_type), dep.service_day.map(special_day)
 
+    # Step 4: the HTML: top bar (direction and bus buttons), live cameras, then one section per direction
     body = ['<div class="bar"><div class="dirs" data-default="sg-jb">'
             + "".join(f'<button type="button" data-dir="{d}" aria-pressed="false">{title}'
                       f'<small>{DIRECTIONS[d]["name"]}</small></button>' for d, title in PAGES)
@@ -814,6 +851,7 @@ def build(db_path, now):
 
 
 def main():
+    # build the page, write dashboard.html, and log one line (cron then uploads the file to the public bucket)
     start = time.time()
     now = datetime.now(SGT).replace(tzinfo=None, microsecond=0)
     OUT.write_text(build(DB_PATH, now), encoding="utf-8")

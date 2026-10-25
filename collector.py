@@ -1,4 +1,11 @@
 """Stage 1: poll BusArrival for both stops and store the raw snapshot. Run by cron every minute."""
+# Big picture: this is the only script that talks to LTA. cron starts it once a minute; it asks LTA about each of
+# the 4 stops in config.COLLECT_STOPS, turns each answer into table rows and appends them to data/causeway.db, then
+# exits. It calculates nothing: trips.py and dashboard.py work everything out later from these raw rows.
+#
+# The file has two halves:
+#   - pure parsing (no network, no database), so the tests can feed it saved API answers;
+#   - thin I/O: the HTTP call, the database, and main() that ties them together.
 import os
 import sqlite3
 import sys
@@ -12,9 +19,14 @@ from config import COLLECT_SERVICES, COLLECT_STOPS
 
 URL = "https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival"
 SGT = ZoneInfo("Asia/Singapore")
-TIME_FMT = "%Y-%m-%d %H:%M:%S"
+TIME_FMT = "%Y-%m-%d %H:%M:%S"  # every time in the database is Singapore time in this text format
 DB_PATH = Path(__file__).parent / "data" / "causeway.db"
 
+# Two tables (created the first time; "IF NOT EXISTS" makes it safe to run every minute):
+#   poll_runs: one row per API call, even a failed or empty one. This is how we later tell "we asked and no bus
+#              was listed" (normal at night) apart from "we didn't ask" (a gap: VM down, network error).
+#   polls:     one row per bus LTA listed: which stop and service, its place in the queue (seq 1-3), ETA, and its
+#              GPS position (lat/lon) when the bus reports one.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS poll_runs (
   polled_at  TEXT NOT NULL,
@@ -42,6 +54,7 @@ CREATE TABLE IF NOT EXISTS polls (
 # ---------- Pure parsing ----------
 
 def blank_to_none(value):
+    # LTA sends "" for missing values; the database stores those as NULL
     return None if value == "" else value
 
 
@@ -51,6 +64,7 @@ def to_coord(value):
         x = float(value)
     except (TypeError, ValueError):
         return None
+    # timetable-only buses (Monitored = 0) come with "0.0": that means "no position", not a place in the ocean
     return None if x == 0.0 else x
 
 
@@ -61,13 +75,15 @@ def to_sgt_text(iso):
 
 def parse_bus_arrival(payload, stop, polled_at, services):
     """One row per listed bus of our services. Blank NextBus2/3 produce no row."""
+    # An LTA answer looks like {"Services": [{"ServiceNo": "170", "NextBus": {...}, "NextBus2": {...}, ...}, ...]}:
+    # per service, up to 3 upcoming buses. Each listed bus becomes one row.
     rows = []
     for svc in (payload or {}).get("Services", []):
-        if svc.get("ServiceNo") not in services:
+        if svc.get("ServiceNo") not in services:  # the stop serves other buses too; keep only ours
             continue
         for seq, field in enumerate(("NextBus", "NextBus2", "NextBus3"), start=1):
             bus = svc.get(field) or {}
-            if not bus.get("EstimatedArrival"):
+            if not bus.get("EstimatedArrival"):  # an empty slot (e.g. only 1 bus coming): no row
                 continue
             monitored = blank_to_none(bus.get("Monitored"))
             rows.append({
@@ -76,7 +92,7 @@ def parse_bus_arrival(payload, stop, polled_at, services):
                 "service": svc["ServiceNo"],
                 "seq": seq,
                 "eta": to_sgt_text(bus["EstimatedArrival"]),
-                "monitored": None if monitored is None else int(monitored),
+                "monitored": None if monitored is None else int(monitored),  # 1 = live GPS, 0 = timetable guess
                 "lat": to_coord(bus.get("Latitude")),
                 "lon": to_coord(bus.get("Longitude")),
                 "load": blank_to_none(bus.get("Load")),
@@ -95,6 +111,8 @@ def count_services(payload, services):
 # ---------- Thin I/O ----------
 
 def fetch(stop, key):
+    # One HTTP GET to LTA for one stop. raise_for_status() turns an HTTP error (e.g. 401 bad key, 500) into an
+    # exception, which poll_stop catches and records.
     r = requests.get(URL, params={"BusStopCode": stop},
                      headers={"AccountKey": key, "accept": "application/json"}, timeout=15)
     r.raise_for_status()
@@ -103,7 +121,9 @@ def fetch(stop, key):
 
 def open_db(path=DB_PATH):
     path.parent.mkdir(exist_ok=True)
+    # timeout=30: if the dashboard build is reading at the same moment, wait up to 30 s instead of failing
     con = sqlite3.connect(path, timeout=30)
+    # WAL ("write-ahead log") lets readers and this writer work at the same time without blocking each other
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
     return con
@@ -126,6 +146,7 @@ def poll_stop(con, stop, key):
         save(con, {"polled_at": polled_at, "stop": stop, "ok": 1, "n_services": n, "error": None}, rows)
         return f"{stop} ok {n}svc {len(rows)}rows", True
     except Exception as e:  # one stop failing must not stop the other
+        # still record the failed call (ok = 0, with the error text), so the analysis knows this minute is missing
         error = f"{type(e).__name__}: {e}"[:500]
         try:
             save(con, {"polled_at": polled_at, "stop": stop, "ok": 0, "n_services": None, "error": error}, [])
@@ -135,6 +156,7 @@ def poll_stop(con, stop, key):
 
 
 def main():
+    # The key comes from the environment (cron loads it from .env); it is never written in the code
     key = os.environ.get("LTA_ACCOUNT_KEY")
     if not key:
         print("LTA_ACCOUNT_KEY is not set")
@@ -143,8 +165,9 @@ def main():
     con = open_db()
     results = [poll_stop(con, stop, key) for stop in COLLECT_STOPS]
     con.close()
+    # one log line per run, e.g. "2026-10-25 21:41:01 46219 ok 4svc 11rows | 46109 ok 4svc 8rows | ..."
     print(started, " | ".join(text for text, _ in results), flush=True)
-    return 0 if all(ok for _, ok in results) else 1
+    return 0 if all(ok for _, ok in results) else 1  # exit code 1 if any stop failed
 
 
 if __name__ == "__main__":

@@ -3,6 +3,9 @@
 Public holidays come from the `holidays` package: Singapore, and Malaysia subdivision "01" = Johor. School holidays
 come from data/school_holidays.csv, filled in by hand (columns country,start,end,name; dates YYYY-MM-DD).
 """
+# Big picture: holidays change cross-border travel a lot (a long weekend's last day jams the return), so they would
+# distort a "typical Saturday". dashboard.py asks is_special(day) and leaves those days out of the typical figures.
+# Dates come from the `holidays` package, never typed in by hand (pip install -U holidays once a year).
 import csv
 from datetime import date, timedelta
 from functools import lru_cache
@@ -27,12 +30,13 @@ def load_school_holidays(path=SCHOOL_CSV):
                 for r in csv.DictReader(f) if r.get("start")]
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=1)  # read the CSV once per run, not once per date
 def _school():
     return tuple((r["start"], r["end"], r["name"]) for r in load_school_holidays())
 
 
 def _as_date(d):
+    # accept a date, a datetime, or text like "2026-10-25"
     return d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
 
 
@@ -51,6 +55,7 @@ def day_flags(d, school=None):
     d = _as_date(d)
     ranges = _school() if school is None else tuple((r["start"], r["end"], r["name"]) for r in school)
     # last day of a long weekend: a day off followed by a working day, in a run of days off that includes a holiday
+    # (walk backwards through the days off; if any of them is a public holiday, this is the last day of a long weekend)
     last_day = False
     if is_off(d) and not is_off(d + DAY):
         x = d
@@ -61,7 +66,7 @@ def day_flags(d, school=None):
     return {
         "sg_ph": d in SG,
         "my_ph": d in JOHOR,
-        "ph_eve": not is_ph(d) and is_ph(d + DAY),
+        "ph_eve": not is_ph(d) and is_ph(d + DAY),  # the day before a public holiday
         "ph_last_day": last_day,
         "school_hol": bool(school_names),
         "names": [n for n in (SG.get(d), JOHOR.get(d)) if n] + school_names,
