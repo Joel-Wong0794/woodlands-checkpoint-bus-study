@@ -1,5 +1,7 @@
 # Causeway Bus Times
 
+[![CI/CD](https://github.com/Joel-Wong0794/woodlands-checkpoint-bus-study/actions/workflows/ci.yml/badge.svg)](https://github.com/Joel-Wong0794/woodlands-checkpoint-bus-study/actions/workflows/ci.yml)
+
 How long the bus across the Johor–Singapore Causeway takes, and how often one leaves, by weekday and hour.
 
 **Live page (phone-friendly):** https://storage.googleapis.com/woodlands-checkpoint-bus-dashboard/causeway-bus-times
@@ -73,6 +75,26 @@ LTA DataMall ──every min──▶ collector.py ──▶ SQLite (raw polls)
 | `dashboard.py`      | Builds one static HTML page (Plotly charts) every 15 min, uploaded to a public bucket. No web server |
 | Weekly backup       | Database copied to a private bucket every Sunday, kept for 30 days                                   |
 | `quality_app.py`    | Local Streamlit app to inspect data quality from a database snapshot (not run on the VM)             |
+
+## CI/CD
+
+```
+git push (main) ──▶ GitHub Actions: install deps, run the test suite
+                          │ all tests pass
+                          ▼
+                    `deploy` branch moved to that commit
+                          │ VM checks every 5 min (cron)
+                          ▼
+                    VM pulls `deploy` ──▶ next collector / dashboard run uses the new code
+```
+
+| Step | Where | What it does |
+| --- | --- | --- |
+| CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Every push and pull request runs the tests on a fresh Ubuntu machine with Python 3.11 (same as the VM) |
+| Release gate | Same workflow | Only if every test passes, the `deploy` branch is fast-forwarded to that commit. A failing commit never reaches the VM |
+| CD | [`deploy/update.sh`](deploy/update.sh), cron on the VM | Fetches `deploy` every 5 min and pulls new commits. Reinstalls packages or the crontab only when those files changed. Logs each deploy |
+
+The VM pulls instead of GitHub pushing to it: no SSH key stored in GitHub and no port opened to the internet. The VM only reads from the public repository.
 
 ## Known limitations
 

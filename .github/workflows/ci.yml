@@ -1,0 +1,43 @@
+# CI/CD: on every push to main, GitHub runs the test suite on a fresh machine.
+# If every test passes, the `deploy` branch is moved to that commit.
+# The VM never pulls main: deploy/update.sh pulls `deploy` every 5 min, so only tested code reaches it.
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:   # "Run workflow" button on GitHub
+
+# One run at a time, oldest first, so `deploy` can't be moved backwards by a slow older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # same as Debian 12 on the VM
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  release:
+    needs: test   # only runs if every test passed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to push the deploy branch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Fast-forward only: fails rather than rewrite deploy if it somehow moved ahead.
+      - run: git push origin HEAD:refs/heads/deploy
