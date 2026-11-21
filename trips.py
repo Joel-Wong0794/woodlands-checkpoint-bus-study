@@ -19,15 +19,15 @@ import math
 import numpy as np
 import pandas as pd
 
-from config import (BACK_M, BLIND_FLAG_MIN, CAUSEWAY_LAT, DIRECTIONS, GAP_SEC, GROUPS, LINK_SLACK_M, MAX_LINK_M, POLL_SEC,
-                    MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN, MIN_TRIP_MIN, MIN_TRIPS_PER_SLOT, SERVICE_DAY_START_HOUR,
+from config import (BACK_M, BLIND_FLAG_MIN, CAUSEWAY_LAT, DIRECTIONS, EXTRAPOLATE, GAP_SEC, GROUPS, LINK_SLACK_M,
+                    MAP_BAND_DEG, MAX_LINK_M, MIN_MAP_TRIPS, POLL_SEC, MAX_LOST_MIN, MAX_SPEED_MS, MAX_TRIP_MIN, MIN_TRIP_MIN, MIN_TRIPS_PER_SLOT, SERVICE_DAY_START_HOUR,
                     SERVICES, SLOT_MIN, STOP_COORDS)
 
 DUP_M = 60  # the same bus in both stops' lists, polled a second apart, can differ by ~20 m
 WOBBLE_M = 50  # GPS noise: a backward step up to this is treated as standing still
 POINT_COLS = ["t", "minute", "service", "lat", "lon", "dist_a", "dist_b", "at_a", "at_b"]
 TRIP_COLS = ["direction", "service", "group", "track", "service_day", "reached_a", "left_a", "reached_b", "wait_min", "ride_min",
-             "blind_min", "n_between", "blind", "ok", "reason"]
+             "blind_min", "n_between", "blind", "ok", "reason", "estimated"]
 
 
 def metres(lat1, lon1, lat2, lon2):
@@ -186,7 +186,11 @@ def find_trips(tracks):
                 rows.append({"service": r.service, "track": tid, "reached_a": reached_a, "left_a": left_a,
                              "reached_b": r.t, "blind_min": blind, "n_between": len(ride) - 2})
                 reached_a = left_a = None  # ready for the bus's next trip
-    df = to_frame(rows, ["service", "track", "reached_a", "left_a", "reached_b", "blind_min", "n_between"])
+    return timed(to_frame(rows, ["service", "track", "reached_a", "left_a", "reached_b", "blind_min", "n_between"]))
+
+
+def timed(df):
+    """Add wait_min and ride_min to trips with reached_a / left_a / reached_b sighting times."""
     # Polling correction: a bus is only seen once a minute, so on average it really left the boarding stop half a
     # poll after its last sighting there and reached the alighting stop half a poll before its first sighting there.
     # Measured rides are therefore ~1 poll too long and measured waits ~1 poll too short; correct both by one poll.
@@ -257,14 +261,86 @@ def check_trips(trips, gaps, direction="jb-sg"):
     t["reason"] = np.where(implausible, "implausible", np.where(in_gap, "polling gap",
                            np.where(unseen, "not seen crossing", "")))
     t["ok"] = t.reason == ""
+    # True = arrival estimated by add_lost (the bus was dropped from LTA's list before it arrived)
+    t["estimated"] = t.estimated.astype(bool) if "estimated" in t else False
     return t[TRIP_COLS].sort_values(["service", "left_a"]).reset_index(drop=True)
+
+
+def on_causeway(lat):
+    """True for latitudes on the Causeway (same half-open band link_tracks and find_departures use)."""
+    return (CAUSEWAY_LAT[0] <= lat) & (lat < CAUSEWAY_LAT[1])
+
+
+def band(lat):
+    """Speed-map band of a latitude, as an integer key (~110 m wide; integers avoid float-rounding mismatches)."""
+    return int(round(lat / MAP_BAND_DEG))
+
+
+def add_lost(tracks, trips, gaps, direction="jb-sg"):
+    """Add trips for buses that left and were seen on the Causeway but dropped off LTA's list before arriving.
+
+    Their arrival = last Causeway fix + the median minutes that complete trips (ok) still needed from the same
+    latitude band in the same hour (the "speed map"). Only for directions in EXTRAPOLATE, and only where the speed
+    map has MIN_MAP_TRIPS complete trips for that band and hour; other lost buses stay lost. The new rows have
+    estimated = True and go through check_trips like any trip (polling gaps, implausible times).
+    """
+    # Why: SG -> JB loses ~44% of departures this way, and leaving them out biased SG -> JB rides low.
+    # Validated offline before building (complete trips cut mid-Causeway, see config.EXTRAPOLATE).
+    if direction not in EXTRAPOLATE or trips.empty or not trips.ok.astype(bool).any():
+        return trips
+    by_track = {k: g for k, g in tracks.sort_values("t").groupby("track")}
+
+    # 1) Speed map from complete trips: {(band, hour the bus left): median minutes still to go to the first sighting
+    #    at the alighting stop}. Counted in distinct trips, so one bus standing in a jam can't fill a band alone.
+    rows = []
+    for tr in trips[trips.ok.astype(bool)].itertuples():
+        g = by_track[tr.track]
+        on = g[(g.t > tr.left_a) & (g.t < tr.reached_b) & on_causeway(g.lat)]
+        rows += [(tr.Index, band(lat), tr.left_a.hour, (tr.reached_b - t).total_seconds() / 60)
+                 for t, lat in zip(on.t, on.lat)]
+    sm = (pd.DataFrame(rows, columns=["trip", "band", "hour", "to_go"])
+          .groupby(["band", "hour"]).agg(to_go=("to_go", "median"), n=("trip", "nunique")))
+    speed_map = sm[sm.n >= MIN_MAP_TRIPS].to_go.to_dict()
+
+    # 2) Lost buses: the same walk as find_trips, but remember the Causeway fixes after leaving. A track that ends
+    #    with Causeway fixes and no fix at the alighting stop is a lost bus. (Tracks have no gaps over MAX_LOST_MIN:
+    #    link_tracks ends a track then, so "the track ended" = "LTA stopped listing the bus".)
+    est = []
+    for tid, g in by_track.items():
+        reached_a = left_a = None
+        seen = []  # Causeway fixes since the bus left the boarding stop
+        for r in g.itertuples():
+            if r.at_a:  # at (or back at) the boarding stop: same rules as find_trips
+                if left_a is None or (r.t - left_a).total_seconds() > MAX_LOST_MIN * 60:
+                    reached_a = r.t
+                left_a, seen = r.t, []
+            elif r.at_b:  # arrived: find_trips already has this trip
+                reached_a, left_a, seen = None, None, []
+            elif left_a is not None and on_causeway(r.lat):
+                seen.append(r)
+        if not seen:
+            continue
+        last = seen[-1]
+        to_go = speed_map.get((band(last.lat), left_a.hour))
+        if to_go is None:  # nobody (or too few) went through this spot in this hour: no basis for a guess
+            continue
+        times = [left_a] + [s.t for s in seen]
+        est.append({"service": last.service, "track": tid, "reached_a": reached_a, "left_a": left_a,
+                    "reached_b": last.t + pd.Timedelta(minutes=to_go),
+                    # blind_min covers only the part we saw; the extrapolated stretch is flagged by `estimated`
+                    "blind_min": max(np.diff(times)).total_seconds() / 60, "n_between": len(seen)})
+    if not est:
+        return trips
+    extra = check_trips(timed(pd.DataFrame(est)).assign(estimated=True), gaps, direction)
+    return pd.concat([trips, extra], ignore_index=True).sort_values(["service", "left_a"]).reset_index(drop=True)
 
 
 def measure_trips(poll_runs, polls, services=SERVICES, direction="jb-sg"):
     """All trips found in `direction`, with flags. Use trips[trips.ok] for stats."""
-    # the whole pipeline in one call: fixes -> tracks -> trips -> flags
+    # the whole pipeline in one call: fixes -> tracks -> trips -> flags -> estimated trips for lost buses
     tracks = link_tracks(gps_points(polls, services, direction))
-    return check_trips(find_trips(tracks), poll_gaps(poll_runs, direction), direction)
+    gaps = poll_gaps(poll_runs, direction)
+    return add_lost(tracks, check_trips(find_trips(tracks), gaps, direction), gaps, direction)
 
 
 # ---------- 5. Stats ----------
@@ -274,14 +350,16 @@ def slot_stats(trips, by=("group", "weekday", "slot"), slot_min=SLOT_MIN):
     # e.g. all good 160/170/170X rides that left on a Saturday between 18:00 and 19:00 -> one row:
     # n (how many), median (the middle one), p25-p75 (the middle half, shown as "usually a-b min")
     t = trips[trips.ok.astype(bool)].copy() if "ok" in trips else trips.copy()
-    cols = [*by, "n", "median", "p25", "p75"]
+    cols = [*by, "n", "median", "p25", "p75", "est"]  # est = how many of the n had an estimated arrival (add_lost)
     if t.empty:
         return pd.DataFrame(columns=cols)
+    t["est"] = t.estimated.astype(bool) if "estimated" in t else False
     t["group"] = t.service.map(group_of)
     t["weekday"] = pd.to_datetime(t.service_day).dt.strftime("%a")
     t["slot"] = pd.to_datetime(t.left_a).dt.floor(f"{slot_min}min").dt.strftime("%H:%M")
-    s = t.groupby(list(by)).ride_min.agg(n="size", median="median", p25=lambda x: x.quantile(.25),
-                                          p75=lambda x: x.quantile(.75)).reset_index()
+    s = t.groupby(list(by)).agg(n=("ride_min", "size"), median=("ride_min", "median"),
+                                p25=("ride_min", lambda x: x.quantile(.25)), p75=("ride_min", lambda x: x.quantile(.75)),
+                                est=("est", "sum")).reset_index()
     return s[s.n >= MIN_TRIPS_PER_SLOT][cols].reset_index(drop=True)
 
 

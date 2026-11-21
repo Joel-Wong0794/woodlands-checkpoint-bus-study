@@ -168,6 +168,48 @@ def test_sg_jb_round_trip():
     assert set(trips.direction) == {"sg-jb"}
 
 
+def every_5_min(n, ride=8):
+    """n SG -> JB-style buses, one every 5 min from 06:00, 2-min wait, identical rides (whole minutes, so every bus
+    is polled at the same points on the Causeway and the speed map has plenty of samples per band)."""
+    t0 = pd.Timestamp(f"{DAY} 06:00")
+    m = pd.Timedelta(minutes=1)
+    return [{"service": "170", "at_a": str(t0 + 5 * i * m), "left_a": str(t0 + (5 * i + 2) * m),
+             "at_b": str(t0 + (5 * i + 2 + ride) * m)} for i in range(n)]
+
+
+def lose(buses, *idx):
+    """flicker windows that make these buses vanish 4 min into the ride, like LTA dropping them mid-Causeway."""
+    return [(i, str(pd.Timestamp(buses[i]["left_a"]) + pd.Timedelta(minutes=4)),
+             str(pd.Timestamp(buses[i]["at_b"]) + pd.Timedelta(minutes=10))) for i in idx]
+
+
+def test_lost_sg_jb_bus_gets_estimated_arrival():
+    """SG -> JB: a bus that vanishes mid-Causeway gets an arrival from the speed map (other buses' time to go)."""
+    buses = every_5_min(24)
+    runs, polls = simulate(buses, f"{DAY} 05:30", f"{DAY} 09:00", flicker=lose(buses, 10, 16), direction="sg-jb")
+    trips = measure_trips(runs, polls, services=("170",), direction="sg-jb")
+    assert_recovered(trips, buses)  # all 24, the 2 lost ones included, each within 1.5 min of the truth
+    est = trips[trips.estimated]
+    assert len(est) == 2 and all(any(matches(t, buses[i]) for t in est.itertuples()) for i in (10, 16))
+    assert est.ok.all() and not trips[~trips.estimated].empty
+
+
+def test_jb_sg_lost_bus_is_not_estimated():
+    """JB -> SG rides are too jam-dependent to extrapolate (offline check, 20 Oct data): a lost bus stays lost."""
+    buses = every_5_min(24)
+    runs, polls = simulate(buses, f"{DAY} 05:30", f"{DAY} 09:00", flicker=lose(buses, 10, 16), direction="jb-sg")
+    trips = measure_trips(runs, polls, services=("170",), direction="jb-sg")
+    assert len(trips[trips.ok]) == 22 and not trips.estimated.any()
+
+
+def test_lost_bus_not_estimated_without_enough_samples():
+    """With fewer than MIN_MAP_TRIPS complete trips through that spot in that hour, there is nothing to learn from."""
+    buses = every_5_min(3)
+    runs, polls = simulate(buses, f"{DAY} 05:30", f"{DAY} 07:00", flicker=lose(buses, 1), direction="sg-jb")
+    trips = measure_trips(runs, polls, services=("170",), direction="sg-jb")
+    assert len(trips[trips.ok]) == 2 and not trips.estimated.any()
+
+
 def test_directions_dont_mix():
     to_sg = random_buses(10, seed=8)
     to_jb = random_buses(10, first="2026-10-09 06:03", seed=9)
@@ -390,9 +432,10 @@ def test_slot_stats():
         rows.append({"service": "170", "service_day": DAY, "left_a": pd.Timestamp("2026-10-10 01:20"),
                      "ride_min": ride, "ok": True})
     s = slot_stats(pd.DataFrame(rows))
-    assert list(s.columns) == ["group", "weekday", "slot", "n", "median", "p25", "p75"]
+    assert list(s.columns) == ["group", "weekday", "slot", "n", "median", "p25", "p75", "est"]
     assert len(s) == 1
     r = s.iloc[0]
+    assert r.est == 0  # no `estimated` column in the input = none estimated
     assert (r.group, r.weekday, r.slot, r.n, r["median"], r.p25, r.p75) == ("160/170/170X", "Fri", "07:00", 4, 25, 17.5, 32.5)
     assert slot_stats(pd.DataFrame(rows), by=("slot",), slot_min=30).empty  # 2 + 2 trips: both slots too thin
 

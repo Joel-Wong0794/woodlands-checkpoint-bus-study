@@ -72,6 +72,16 @@ BACK_M = 150              # on the Causeway a track can't move this far against 
 MAX_LOST_MIN = 15          # a track survives this long without a fix (buses drop off the list and come back)
 BLIND_FLAG_MIN = 5         # a ride with a longer stretch without fixes is flagged (time less precise)
 
+# ---------- Lost buses (trips.add_lost) ----------
+# LTA drops a bus from the arrival stop's list once its ETA has passed, often mid-Causeway (44% of SG -> JB
+# departures). Such a bus gets an estimated arrival: its last Causeway fix + the median time complete trips still
+# needed from the same spot (latitude band) in the same hour, a "speed map" (idea: nextstopsg.app/interpolation).
+# Offline check on 20 Oct data (complete trips cut mid-Causeway): SG -> JB median error 0.0 min, 74% within +-1 min;
+# JB -> SG off by 6+ min on average for every method (jams), so only SG -> JB is extrapolated.
+EXTRAPOLATE = ("sg-jb",)   # directions where lost buses get an estimated arrival
+MAP_BAND_DEG = 0.001       # speed-map band: 0.001 degree of latitude = ~110 m along the Causeway
+MIN_MAP_TRIPS = 3          # a band x hour needs this many complete-trip fixes, else the bus stays lost
+
 # ---------- Trips and statistics ----------
 SLOT_MIN = 60              # slot size for stats; hourly until there are enough weeks of data
 
