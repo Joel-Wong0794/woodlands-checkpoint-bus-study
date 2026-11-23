@@ -5,6 +5,9 @@
 # address; no extension, so the type is set explicitly) and as index.html (so older links keep working).
 # --gzip-local-all stores the page gzip-compressed (~10x smaller download); browsers unzip it automatically.
 */15 * * * * cd $HOME/woodlands-checkpoint-bus-study && flock -n /tmp/dashboard.lock sh -c '.venv/bin/python dashboard.py && gcloud storage cp dashboard.html gs://woodlands-checkpoint-bus-dashboard/causeway-bus-times --cache-control=no-cache --content-type=text/html --gzip-local-all && gcloud storage cp dashboard.html gs://woodlands-checkpoint-bus-dashboard/index.html --cache-control=no-cache --gzip-local-all' >> logs/dashboard.log 2>&1
+# Alert: every 15 min, ping healthchecks.io (HC_URL in .env) only if an LTA call succeeded in the last 10 min.
+# No ping = the service emails. Covers a stopped collector and a hung or stopped VM. Skipped while HC_URL is unset.
+*/15 * * * * cd $HOME/woodlands-checkpoint-bus-study && set -a && . ./.env && set +a && [ -n "$HC_URL" ] && [ "$(sqlite3 data/causeway.db "SELECT count(*) FROM poll_runs WHERE ok=1 AND polled_at > datetime('now','localtime','-10 minutes')")" -gt 0 ] && curl -fsS -m 10 --retry 3 "$HC_URL" > /dev/null 2>> logs/heartbeat.log
 # CD: every 5 min, pull the `deploy` branch (moved by GitHub Actions only after the tests pass).
 */5 * * * * cd $HOME/woodlands-checkpoint-bus-study && flock -n /tmp/deploy.lock sh deploy/update.sh >> logs/deploy.log 2>&1
 # Stage 4: weekly backup (Sunday 03:00) to the private bucket.
