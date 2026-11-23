@@ -270,8 +270,9 @@ def test_hover_text_names_the_hour_median_and_count(tmp_path):
     fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=16), f"{DAY} 05:30",
             f"{DAY} 12:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
-    # the count ("12 trips") is in the chart data, so check the template line and the data text separately
-    for text in ("Median ride time across Causeway: ", "From %{customdata[3]}<br>", ' trips"', "A bus every %{y:.0f} min",
+    # the count ("12 trips") is in the chart data, so check the template line and the data text separately.
+    # No "<br>" in the expected text: Plotly 7 writes it as <br>, Plotly 5 as <br> (CI vs laptop).
+    for text in ("Median ride time across Causeway: ", "From %{customdata[3]}", ' trips"', "A bus every %{y:.0f} min",
                  ' gaps between buses"', "At least %{y:.1f} buses left"):
         assert text in html, text
 
