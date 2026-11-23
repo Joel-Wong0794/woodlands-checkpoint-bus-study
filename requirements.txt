@@ -1,5 +1,9 @@
-requests
-pandas
-plotly
-holidays
-pytest
+# Pinned to what the VM (production) runs, from its pip freeze on 2026-11-23, so CI tests the same versions
+# the live page is built with. Upgrade on purpose: change a pin here, let CI pass, then the VM follows.
+# holidays stays at 0.106: the SG / Johor holiday dates were checked against that version.
+requests==2.34.2
+pandas==3.0.6
+numpy==2.4.6
+plotly==7.1.0
+holidays==0.106
+pytest==9.1.1
