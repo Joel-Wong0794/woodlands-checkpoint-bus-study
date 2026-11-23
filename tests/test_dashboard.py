@@ -270,9 +270,17 @@ def test_hover_text_names_the_hour_median_and_count(tmp_path):
     fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=16), f"{DAY} 05:30",
             f"{DAY} 12:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
-    for text in ("Median ride time across Causeway: ", "From %{customdata[3]} trips", "A bus every %{y:.0f} min",
-                 "From %{customdata[3]} gaps between buses", "At least %{y:.1f} buses left"):
+    # the count ("12 trips") is in the chart data, so check the template line and the data text separately.
+    # No "<br>" in the expected text: Plotly 7 writes it as <br>, Plotly 5 as <br> (CI vs laptop).
+    for text in ("Median ride time across Causeway: ", "From %{customdata[3]}", ' trips"', "A bus every %{y:.0f} min",
+                 ' gaps between buses"', "At least %{y:.1f} buses left"):
         assert text in html, text
+
+
+def test_hover_count_says_how_many_were_estimated():
+    s = pd.DataFrame({"n": [12, 5, None], "est": [4, 0, None]})
+    assert D.counted(s, "trips") == ["12 trips, 4 estimated", "5 trips", None]
+    assert D.counted(s.drop(columns="est"), "gaps") == ["12 gaps", "5 gaps", None]  # gap stats have no est
 
 
 def test_right_now_heading_numbers_on_points_and_detail_fold(tmp_path):

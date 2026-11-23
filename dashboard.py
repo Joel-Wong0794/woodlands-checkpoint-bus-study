@@ -347,6 +347,13 @@ def base_layout(fig, height):
     return fig
 
 
+def counted(s, count):
+    """Hover text per slot: '12 trips', or '12 trips, 5 estimated' when some arrivals were estimated (trips.add_lost)."""
+    est = s["est"] if "est" in s else pd.Series(0, index=s.index)  # gap stats (bus_gaps) have no estimates
+    return [None if pd.isna(n) else f"{n:.0f} {count}" + (f", {e:.0f} estimated" if e > 0 else "")
+            for n, e in zip(s.n, est.fillna(0))]
+
+
 def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", dots=None, height=300,
             headline="Median ride time across Causeway: %{y:.0f} min", count="trips"):
     """Median by hour for one weekday and bus (shaded: middle half), lines broken at hidden hours; dots = today."""
@@ -370,10 +377,10 @@ def day_fig(stats, direction, weekday, group, ytitle="minutes across Causeway", 
                                  textposition="top center", textfont=dict(size=10, color=LIGHT["ink"]),
                                  line=dict(width=2, color=LIGHT[key]), marker=dict(size=8, color=LIGHT[key]),
                                  customdata=list(zip(s.slot.map(slot_label, na_action="ignore"), s.p25, s.p75,
-                                                     s.n)),
+                                                     counted(s, count))),
                                  hovertemplate=f"<b>{weekday} %{{customdata[0]}}</b><br>"
                                                f"{headline}<br>"
-                                               f"From %{{customdata[3]}} {count}<br>"
+                                               "From %{customdata[3]}<br>"
                                                "Usually %{customdata[1]:.0f}–%{customdata[2]:.0f} min"
                                                "<extra></extra>"))
     # best (green) and worst (red) hours: soft bands behind the line, one hour wide
@@ -815,7 +822,9 @@ def build(db_path, now):
     # Step 2: GPS fixes -> tracks -> trips, for each direction (trips.py), then mark holidays and special days
     # both directions over the plan window (4 weeks); the heatmap and "Now" use the last DASH_DAYS
     all_tracks = {d: T.link_tracks(T.gps_points(polls, direction=d)) for d in DIRECTIONS}
-    found = [T.check_trips(T.find_trips(all_tracks[d]), T.poll_gaps(runs, d), d) for d in DIRECTIONS]
+    # add_lost: SG -> JB buses dropped from LTA's list mid-Causeway get an estimated arrival (trips.estimated)
+    found = [T.add_lost(all_tracks[d], T.check_trips(T.find_trips(all_tracks[d]), T.poll_gaps(runs, d), d),
+                        T.poll_gaps(runs, d), d) for d in DIRECTIONS]
     all_trips = pd.concat([f for f in found if len(f)] or found[:1], ignore_index=True)
     all_trips["day_type"] = all_trips.service_day.map(day_type)
     all_trips["special"] = all_trips.service_day.map(special_day)
