@@ -1010,11 +1010,13 @@ def group_json(c, direction, group):
     agg = ok.assign(h=hour_x(ok.left_a).astype(int)).groupby(["service_day", "h"]).ride_min.agg(["median", "size"])
     return {
         "name": group_name(group),
+        "gap_shown": shown,  # False: the page says "Not enough data yet" instead of a gap chart (as V1)
         "live": {"window": live_window(now).split("–"), "ride": rounded(live_ride(d["trips14"], group, now)),
                  "gap": rounded(live_gap(d["live_deps"], group, now)) if shown else None},
         "typical": typical,
         "best": {w: s for w in WEEKDAYS if (s := best_slots(c["plan"], direction, w, group))},
         "worst": {w: s for w in WEEKDAYS if (s := best_slots(c["plan"], direction, w, group, "worst"))},
+        "best_text": {w: t for w in WEEKDAYS if (t := best_text(c["plan"], direction, w, group))},
         "departures": departures,
         "today": [{"left": f"{r.left_a:%H:%M}", "ride": num(r.ride_min), "service": r.service,
                    "est": bool(getattr(r, "estimated", False))} for r in dots.itertuples()],
@@ -1022,6 +1024,11 @@ def group_json(c, direction, group):
                     "median": [[num(agg["median"].get((day, h))) for h in HOURS] for day in c["days"]],
                     "n": [[int(agg["size"].get((day, h), 0)) for h in HOURS] for day in c["days"]]},
     }
+
+
+def ph_dates(days):
+    """The public holidays (Singapore or Johor) among `days`, for the page's ★ marks."""
+    return [d for d in days if C.day_flags(d)["sg_ph"] or C.day_flags(d)["my_ph"]]
 
 
 def data_json(c, now):
@@ -1033,11 +1040,14 @@ def data_json(c, now):
            "calendar": {"ph": flags["sg_ph"] or flags["my_ph"], "ph_eve": flags["ph_eve"],
                         "ph_last_day": flags["ph_last_day"], "names": flags["names"]},
            "rules": {"quick_max": QUICK_MAX, "slow_min": SLOW_MIN, "min_days": ROUGH_DAYS,
-                     "min_trips": MIN_TRIPS_PER_SLOT},
+                     "min_trips": MIN_TRIPS_PER_SLOT, "cover_full": COVER_FULL, "cover_part": COVER_PART},
            "cameras": [{"id": cid, "name": name} for cid, name in CAMERAS],
-           "directions": {}}
+           # bus toggle order (first = default); stated because JavaScript sorts number-like keys ("950") first
+           "group_order": [group_key(g) for g in BUS_ORDER],
+           "ph_dates": [], "directions": {}}
     if c is None:
         return out
+    out["ph_dates"] = ph_dates(sorted(c["per_dir"][PAGES[0][0]]["cover"]))  # the 4-week window
     for direction, title in PAGES:
         out["directions"][direction] = {
             "title": title, "name": DIRECTIONS[direction]["name"], "berth": BERTH[direction],
