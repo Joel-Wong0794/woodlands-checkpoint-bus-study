@@ -357,3 +357,75 @@ def test_service_day_labels():
     assert D.day_label("2026-10-12") == "Mon 12 Oct"
     assert D.day_type("2026-10-10") == "weekend" and D.day_type("2026-10-09") == "weekday"
     assert D.day_type("2026-12-25") == "holiday"
+
+
+# ---------- Data coverage strip ----------
+
+def polled(start, end, stops=("46219", "46109"), ok=1):
+    """poll_runs rows: one successful call per stop per minute, from start to end (end excluded)."""
+    minutes = pd.date_range(start, end, freq="min", inclusive="left")
+    return pd.DataFrame([{"polled_at": f"{m:%Y-%m-%d %H:%M}:0{i + 1}", "stop": s, "ok": ok}
+                         for m in minutes for i, s in enumerate(stops)])
+
+
+def test_coverage_full_day_and_six_hour_gap():
+    runs = pd.concat([polled("2026-11-02 03:00", "2026-11-03 03:00"),            # Mon: every minute
+                      polled("2026-11-03 03:00", "2026-11-03 09:00"),            # Tue: 6 h missing ...
+                      polled("2026-11-03 15:00", "2026-11-04 03:00")])           # ... 09:00-15:00
+    cover = D.coverage(runs, "jb-sg", ["2026-11-03", "2026-11-02"], now=datetime.fromisoformat("2026-11-05 12:00"))
+    assert cover["2026-11-02"] == 1.0
+    assert cover["2026-11-03"] == 0.75
+    assert D.cover_level(1.0) == "full" and D.cover_level(0.75) == "part" and D.cover_level(0.2) == "miss"
+
+
+def test_coverage_today_counts_only_minutes_so_far():
+    runs = polled("2026-11-05 03:00", "2026-11-05 12:00")
+    cover = D.coverage(runs, "jb-sg", ["2026-11-05"], now=datetime.fromisoformat("2026-11-05 12:00:30"))
+    assert cover["2026-11-05"] == 1.0  # not "missing" just because the day isn't over
+
+
+def test_coverage_blank_before_collection_and_failed_polls_dont_count():
+    runs = pd.concat([polled("2026-11-04 03:00", "2026-11-04 15:00"),
+                      polled("2026-11-04 15:00", "2026-11-05 03:00", ok=0)])      # API errors all evening
+    cover = D.coverage(runs, "jb-sg", ["2026-11-04", "2026-11-03"], now=datetime.fromisoformat("2026-11-06 12:00"))
+    assert cover["2026-11-03"] is None  # before the first poll: blank, not missing
+    assert cover["2026-11-04"] == 0.5
+
+
+def test_coverage_first_day_counts_from_the_first_poll():
+    runs = polled("2026-11-05 00:30", "2026-11-05 03:00")  # collection began 00:30, late in service day 4 Nov
+    cover = D.coverage(runs, "jb-sg", ["2026-11-04"], now=datetime.fromisoformat("2026-11-06 12:00"))
+    assert cover["2026-11-04"] == 1.0
+
+
+def test_coverage_needs_every_stop_of_the_direction():
+    runs = polled("2026-11-02 03:00", "2026-11-03 03:00", stops=("46219",))        # 46109 never answered
+    cover = D.coverage(runs, "jb-sg", ["2026-11-02"], now=datetime.fromisoformat("2026-11-04 12:00"))
+    assert cover["2026-11-02"] == 0.0
+    sg = D.coverage(runs, "sg-jb", ["2026-11-02"], now=datetime.fromisoformat("2026-11-04 12:00"))
+    assert sg["2026-11-02"] is None  # no SG -> JB stop polled at all yet
+
+
+def test_coverage_strip_html():
+    days = [(pd.Timestamp("2026-11-25") - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(28)]
+    cover = {d: 1.0 for d in days} | {"2026-11-20": 0.71, "2026-11-19": 0.1, "2026-10-29": None}
+    html = D.coverage_html(cover, today="2026-11-25")
+    assert "Data collected: 25 of 27 days complete" in html  # 27 days with data, 1 partial, 1 missing
+    assert html.count('class="cell ') == 28
+    assert 'aria-label="Fri 20 Nov · 71% collected"' in html and 'class="cell part' in html
+    assert 'class="cell miss' in html and 'class="cell none' in html
+    assert "today" in html
+    assert html.index(">Mon<") < html.index(">Sun<")  # columns are weekdays, Monday first
+
+
+def test_coverage_marks_public_holidays():
+    html = D.coverage_html({"2026-12-25": 1.0}, today="2026-12-26")
+    assert 'aria-label="Fri 25 Dec · 100% collected · public holiday"' in html and "★" in html
+
+
+def test_coverage_strip_on_each_direction_page(tmp_path):
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(10, service="170", first=f"{DAY} 06:00", headway=(10, 20), seed=3),
+            f"{DAY} 05:30", f"{DAY} 18:00")
+    html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
+    assert html.count('<details class="cover">') == 2

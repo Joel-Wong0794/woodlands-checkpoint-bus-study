@@ -108,6 +108,7 @@ GAP_SHOWN = {("jb-sg", "160/170/170X"), ("sg-jb", "160/170/170X"), ("sg-jb", "95
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
+COVER_FULL, COVER_PART = 0.95, 0.5  # Data collected strip: a day is complete / partial at these shares of minutes
 
 # Colours (dataviz reference palette). The page script swaps LIGHT -> DARK for dark mode.
 LIGHT = {"surface": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "grid": "#e7e6e2",
@@ -285,6 +286,34 @@ def now_gap_tile(departures, group, now):
     return f"{recent.diff().dropna().dt.total_seconds().median() / 60:.0f} min", f"from {len(recent)} buses"
 
 
+def coverage(runs, direction, days, now):
+    """{service day: share of its minutes (0-1) in which every stop of `direction` was polled OK}, None before the
+    first poll. Today counts only the minutes so far. Shown as the 'Data collected' strip: was the system up?"""
+    # Polling only, not GPS: a 100% day can still have few trips (quiet hours, buses without GPS). Its job is to show
+    # outages honestly, e.g. the VM hang of 22-25 Oct, instead of charts that silently go stale.
+    stops = {DIRECTIONS[direction]["board"], DIRECTIONS[direction]["alight"]}
+    r = runs[(runs.ok == 1) & runs.stop.isin(stops)]
+    if r.empty:
+        return {d: None for d in days}
+    # a minute counts when every stop answered in it (the collector polls each stop once a minute)
+    per_min = r.groupby(pd.to_datetime(r.polled_at).dt.floor("min")).stop.nunique()
+    covered = pd.Series(per_min[per_min == len(stops)].index).map(service_day).value_counts()
+    began = pd.Timestamp(r.polled_at.min()).floor("min")
+    first, out = service_day(began), {}
+    for d in days:
+        start = pd.Timestamp(d) + pd.Timedelta(hours=SERVICE_DAY_START_HOUR)
+        end = min(start + pd.Timedelta(days=1), pd.Timestamp(now).floor("min"))
+        start = max(start, began)  # the day collection began counts from its first poll, so it isn't "missing"
+        minutes = (end - start) / pd.Timedelta(minutes=1)
+        out[d] = None if d < first or minutes <= 0 else round(min(1.0, covered.get(d, 0) / minutes), 3)
+    return out
+
+
+def cover_level(share):
+    """'full' (>= 95% of minutes), 'part' (50-95%) or 'miss' (< 50%): three levels read faster than shades."""
+    return "full" if share >= COVER_FULL else "part" if share >= COVER_PART else "miss"
+
+
 def plan_stats(trips):
     """Ride per direction, weekday, group and slot (special days left out), and the dates behind each direction x weekday."""
     # This is the "typical ride": e.g. every good ride on a normal Saturday leaving 18:00-19:00 in the last 4 weeks
@@ -454,15 +483,46 @@ def tile_html(label, value, note):
     return f'<div class="tile"><div class="lbl">{label}</div><div class="val">{value}</div><div class="note">{note}</div></div>'
 
 
+def coverage_html(cover, today):
+    """The 'Data collected' strip: a calendar of the window (rows = weeks, columns = Mon-Sun), one square per day,
+    coloured complete / partial / missing, ★ for a public holiday. Plain HTML + CSS, collapsed by default."""
+    # Like GitHub's contribution graph, but with weeks as rows: 4 weeks fit a phone better that way, and each column
+    # is one weekday, i.e. exactly the days behind that weekday's Plan your day chart.
+    shown = {d: s for d, s in cover.items() if s is not None}
+    full = sum(cover_level(s) == "full" for s in shown.values())
+    summary = f"Data collected: {full} of {len(shown)} days complete" if shown else "Data collected: none yet"
+    first = pd.Timestamp(min(cover))
+    start, end = first - pd.Timedelta(days=first.weekday()), pd.Timestamp(today)
+    end += pd.Timedelta(days=6 - end.weekday())  # whole weeks, Monday to Sunday
+    cells = []
+    for day in pd.date_range(start, end):
+        d = day.strftime("%Y-%m-%d")
+        if d not in cover:  # outside the window (or in the future): an empty slot keeps the grid aligned
+            cells.append('<span class="pad"></span>')
+            continue
+        flags = C.day_flags(d)
+        ph = flags["sg_ph"] or flags["my_ph"]
+        share = cover[d]
+        level = "none" if share is None else cover_level(share)
+        label = day_label(d) + (" · not collected yet" if share is None else f" · {share:.0%} collected")
+        label += " · public holiday" if ph else ""
+        cells.append(f'<span class="cell {level}{" today" if d == today else ""}" title="{label}" '
+                     f'aria-label="{label}">{day.day}{"★" if ph else ""}</span>')
+    head = "".join(f'<span class="wd">{w}</span>' for w in WEEKDAYS)
+    return (f'<details class="cover"><summary>{summary}</summary><div class="covgrid">{head}{"".join(cells)}</div>'
+            '<p class="note"><span class="key full"></span> complete <span class="key part"></span> partial '
+            '<span class="key miss"></span> missing · ★ public holiday · share of minutes LTA was polled</p></details>')
+
+
 def page(body, subtitle=""):
     swap = {LIGHT[k]: DARK[k] for k in LIGHT if k != "ramp"} | dict(zip(LIGHT["ramp"], DARK["ramp"]))
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Causeway Bus Times</title>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
-:root {{ color-scheme: light; --surface:{LIGHT['surface']}; --ink:{LIGHT['ink']}; --ink2:{LIGHT['ink2']}; --line:{LIGHT['grid']}; --tile:#f3f2ef; }}
-@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ color-scheme: dark; --surface:{DARK['surface']}; --ink:{DARK['ink']}; --ink2:{DARK['ink2']}; --line:{DARK['grid']}; --tile:#242422; }} }}
-:root[data-theme="dark"] {{ color-scheme: dark; --surface:{DARK['surface']}; --ink:{DARK['ink']}; --ink2:{DARK['ink2']}; --line:{DARK['grid']}; --tile:#242422; }}
+:root {{ color-scheme: light; --surface:{LIGHT['surface']}; --ink:{LIGHT['ink']}; --ink2:{LIGHT['ink2']}; --line:{LIGHT['grid']}; --tile:#f3f2ef; --cfull:#2a78d6; }}
+@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ color-scheme: dark; --surface:{DARK['surface']}; --ink:{DARK['ink']}; --ink2:{DARK['ink2']}; --line:{DARK['grid']}; --tile:#242422; --cfull:#3987e5; }} }}
+:root[data-theme="dark"] {{ color-scheme: dark; --surface:{DARK['surface']}; --ink:{DARK['ink']}; --ink2:{DARK['ink2']}; --line:{DARK['grid']}; --tile:#242422; --cfull:#3987e5; }}
 body {{ margin:0; padding:16px; background:var(--surface); color:var(--ink); font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }}
 main {{ max-width:980px; margin:0 auto; }}
 h1 {{ font-size:19px; margin:0; }} h2 {{ font-size:17px; margin:28px 0 8px; }} h3 {{ font-size:14px; margin:18px 0 4px; color:var(--ink2); }}
@@ -509,6 +569,14 @@ dialog.lb::backdrop {{ background:transparent; }}
   color:var(--ink); font:inherit; cursor:pointer; }}
 .days button[aria-pressed="true"] {{ background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600; }}
 .best {{ font-size:13px; margin:2px 0 10px; }}
+.covgrid {{ display:grid; grid-template-columns:repeat(7,minmax(0,40px)); gap:4px; margin:6px 0 2px; }}
+.covgrid .wd {{ font-size:11px; color:var(--ink2); text-align:center; }}
+.covgrid .cell {{ aspect-ratio:1; border-radius:5px; display:flex; align-items:center; justify-content:center;
+  font-size:11px; border:1px solid transparent; }}
+.cell.full, .key.full {{ background:var(--cfull); color:#fff; }} .cell.part, .key.part {{ background:linear-gradient(135deg,var(--cfull) 50%,var(--tile) 50%); border-color:var(--cfull); color:var(--ink); text-shadow:0 0 3px var(--surface); }}
+.cell.miss, .key.miss {{ border:1px dashed var(--ink2); color:var(--ink2); }} .cell.none {{ background:var(--tile); color:var(--ink2); }}
+.cell.today {{ outline:2px solid var(--ink); outline-offset:1px; }}
+.key {{ display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin-left:6px; }}
 .reload {{ position:fixed; right:14px; bottom:14px; z-index:20; display:flex; align-items:center; gap:8px;
   padding:6px 12px 6px 6px; border:1px solid var(--line); border-radius:999px; background:var(--tile); color:var(--ink);
   font:inherit; font-size:13px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.15); }}
@@ -734,7 +802,7 @@ def typical_data(direction, stats, waits):
     return out
 
 
-def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, live_deps):
+def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, live_deps, cover):
     """One direction's page: per bus the Right now tiles, then a day selector and per bus the Waiting / Ride tabs."""
     # Layout, top to bottom: "Right now" tiles -> Plan your day (day buttons, hour picker) -> per bus: Typical
     # tiles, then two tabs: Waiting (gap between buses) and Ride across Causeway. Everything for all 7 weekdays and
@@ -755,6 +823,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
            '<label class="hourpick">Hour <select class="hours">'
            + "".join(f'<option value="{h % 24:02d}">{h % 24:02d}:00–{(h + 1) % 24:02d}:00</option>' for h in HOURS)
            + "</select></label>",
+           coverage_html(cover, today),  # Data collected: which of the 4 weeks behind these charts were polled
            f'<script type="application/json" class="typical" data-dir="{direction}">'
            f"{json.dumps(typical_data(direction, stats, waits), separators=(',', ':'))}</script>"]
     ok14 = trips14[trips14.ok]
@@ -854,7 +923,7 @@ def build(db_path, now):
         body.append(page_html(direction, plan, plan_dates, bus_gaps(all_deps[direction], T.poll_gaps(runs, direction), direction),
                               departures_per_hour(all_deps[direction], runs, direction),
                               mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today,
-                              all_deps[direction]))
+                              all_deps[direction], coverage(runs, direction, plan_days, now)))
         body.append("</section>")
     return page("\n".join(body), f"JB ⇄ Singapore checkpoints · updated {now:%H:%M}")
 
