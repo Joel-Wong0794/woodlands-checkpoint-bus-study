@@ -350,7 +350,8 @@ def slot_stats(trips, by=("group", "weekday", "slot"), slot_min=SLOT_MIN):
     # e.g. all good 160/170/170X rides that left on a Saturday between 18:00 and 19:00 -> one row:
     # n (how many), median (the middle one), p25-p75 (the middle half, shown as "usually a-b min")
     t = trips[trips.ok.astype(bool)].copy() if "ok" in trips else trips.copy()
-    cols = [*by, "n", "median", "p25", "p75", "est"]  # est = how many of the n had an estimated arrival (add_lost)
+    # est = how many of the n had an estimated arrival (add_lost); days = how many service days they came from
+    cols = [*by, "n", "median", "p25", "p75", "est", "days"]
     if t.empty:
         return pd.DataFrame(columns=cols)
     t["est"] = t.estimated.astype(bool) if "estimated" in t else False
@@ -359,7 +360,7 @@ def slot_stats(trips, by=("group", "weekday", "slot"), slot_min=SLOT_MIN):
     t["slot"] = pd.to_datetime(t.left_a).dt.floor(f"{slot_min}min").dt.strftime("%H:%M")
     s = t.groupby(list(by)).agg(n=("ride_min", "size"), median=("ride_min", "median"),
                                 p25=("ride_min", lambda x: x.quantile(.25)), p75=("ride_min", lambda x: x.quantile(.75)),
-                                est=("est", "sum")).reset_index()
+                                est=("est", "sum"), days=("service_day", "nunique")).reset_index()
     return s[s.n >= MIN_TRIPS_PER_SLOT][cols].reset_index(drop=True)
 
 
