@@ -9,6 +9,7 @@ Everything is recomputed from the raw polls in the window: polls -> trips (trips
 #                       "Right now" figures for the last hour, best/worst hours;
 #   4. figures + page:  Plotly charts, assembled into ONE static HTML file (dashboard.html), which cron uploads
 #                       to the public bucket. There is no web server: the phone just downloads that file.
+# V2: the same compute() result is also written as data.json (data_json below), for the static V2 page in web/.
 # The page holds every weekday, direction and bus pre-built; a little JavaScript in the page only shows/hides them
 # when buttons are tapped. The file reads top to bottom: settings, small helpers, calculations, figures, page.
 import json
@@ -32,6 +33,8 @@ from config import (DASH_DAYS, DIRECTIONS, GROUPS, MAX_TRIP_MIN, MIN_TRIPS_PER_S
 ROOT = Path(__file__).parent
 DB_PATH = ROOT / "data" / "causeway.db"
 OUT = ROOT / "dashboard.html"
+OUT_JSON = ROOT / "data.json"  # V2: the data behind the V2 page (web/), uploaded next to it
+SCHEMA_VERSION = 1  # data.json format; raise it when a field changes meaning or is removed
 SGT = ZoneInfo("Asia/Singapore")
 
 PROFILE_TITLE = "Ride across Causeway, by hour you leave"
@@ -108,6 +111,8 @@ GAP_SHOWN = {("jb-sg", "160/170/170X"), ("sg-jb", "160/170/170X"), ("sg-jb", "95
 BEST_HOURS = (6, 23)  # best/worst times are picked from slots starting 06:00-22:59
 MIN_SPREAD_MIN = 3    # name fastest/slowest hours only if their medians differ by this much (each ride is +-1 min)
 HOURS = range(5, 26)  # x axis: 05:00 -> 01:00 (next day)
+QUICK_MAX, SLOW_MIN = 10, 25  # V2 hour strip: ride < 10 min "Quick", 10-25 "Moderate", > 25 "Slow"
+ROUGH_DAYS = 3  # V2: a typical figure from fewer days than this is shown greyed, "rough"
 COVER_FULL, COVER_PART = 0.95, 0.5  # Data collected strip: a day is complete / partial at these shares of minutes
 
 # Colours (dataviz reference palette). The page script swaps LIGHT -> DARK for dark mode.
@@ -269,22 +274,33 @@ def live_window(now):
     return f"{now - timedelta(minutes=60):%H:%M}–{now:%H:%M}"
 
 
-def now_tile(trips, group, now):
-    """Right now: median ride of this group's trips that reached the alighting stop in the last hour."""
+def live_ride(trips, group, now):
+    """{'median', 'n'}: median ride of this group's trips that reached the alighting stop in the last hour, or None."""
     ok = trips[trips.ok & (trips.group == group)]
     recent = ok[(ok.reached_b > now - timedelta(minutes=60)) & (ok.reached_b <= now)]
-    if len(recent):
-        return f"{recent.ride_min.median():.0f} min", f"from {len(recent)} trips"
-    return "—", "no trips seen"
+    return {"median": float(recent.ride_min.median()), "n": len(recent)} if len(recent) else None
 
 
-def now_gap_tile(departures, group, now):
-    """Right now: median minutes between this group's departures in the last hour (n buses = n - 1 gaps)."""
+def live_gap(departures, group, now):
+    """{'median', 'n'}: median minutes between this group's departures in the last hour (n = buses, so n - 1 gaps),
+    or None with fewer than 2 buses."""
     t = pd.to_datetime(departures[departures.group == group].left_a)
     recent = t[(t > now - timedelta(minutes=60)) & (t <= now)].sort_values()
     if len(recent) < 2:
-        return "—", "not enough buses seen"
-    return f"{recent.diff().dropna().dt.total_seconds().median() / 60:.0f} min", f"from {len(recent)} buses"
+        return None
+    return {"median": float(recent.diff().dropna().dt.total_seconds().median() / 60), "n": len(recent)}
+
+
+def now_tile(trips, group, now):
+    """Right now (V1 tile): median ride in the last hour, as text."""
+    r = live_ride(trips, group, now)
+    return (f"{r['median']:.0f} min", f"from {r['n']} trips") if r else ("—", "no trips seen")
+
+
+def now_gap_tile(departures, group, now):
+    """Right now (V1 tile): median gap between departures in the last hour, as text."""
+    g = live_gap(departures, group, now)
+    return (f"{g['median']:.0f} min", f"from {g['n']} buses") if g else ("—", "not enough buses seen")
 
 
 def coverage(runs, direction, days, now):
@@ -920,7 +936,11 @@ def compute(db_path, now):
 
 def build(db_path, now):
     """The whole V1 page as HTML. `now` is naive Singapore time."""
-    c = compute(db_path, now)
+    return build_html(compute(db_path, now), now)
+
+
+def build_html(c, now):
+    """The V1 page from a compute() result (None = no data yet)."""
     if c is None:
         return page("<p><b>No data yet.</b> The collector hasn't stored any polls in this window.</p>",
                     f"updated {now:%H:%M}")
@@ -947,11 +967,93 @@ def build(db_path, now):
     return page("\n".join(body), f"JB ⇄ Singapore checkpoints · updated {now:%H:%M}")
 
 
+# ---------- V2: data.json ----------
+# The V2 page (web/) is plain HTML/JS: it downloads this file and draws everything from it. All the maths stays here
+# in Python (tested); the page only formats numbers. Missing = not enough data (the page says so).
+
+def num(x):
+    """A float rounded to 0.1, or None for NaN (JSON has no NaN)."""
+    return None if pd.isna(x) else round(float(x), 1)
+
+
+def rounded(live):
+    """A live_ride / live_gap result with its median rounded to 0.1 (None stays None)."""
+    return None if live is None else {**live, "median": num(live["median"])}
+
+
+def stat_json(r):
+    """One slot's figure: median, middle half, how many trips/gaps and from how many days."""
+    out = {"median": num(r.median), "p25": num(r.p25), "p75": num(r.p75), "n": int(r.n), "days": int(r.days)}
+    if "est" in r._fields:
+        out["est"] = int(r.est)
+    return out
+
+
+def group_json(c, direction, group):
+    """Everything one bus group's blocks need on one direction's page."""
+    d, now, today = c["per_dir"][direction], pd.Timestamp(c["now"]), c["today"]
+    shown = (direction, group) in GAP_SHOWN
+    # typical: {weekday: {HH: {"ride": {...}, "gap": {...}}}}; gap only where V1 shows it (GAP_SHOWN)
+    typical = {}
+    for frame, kind in ((c["plan"], "ride"), (d["waits"], "gap")):
+        if kind == "gap" and not shown:
+            continue
+        f = frame[(frame.direction == direction) & (frame.group == group)]
+        for r in f.itertuples():
+            typical.setdefault(r.weekday, {}).setdefault(r.slot[:2], {})[kind] = stat_json(r)
+    deps = d["deps"][d["deps"].group == group]
+    departures = {}
+    for r in deps.itertuples():
+        departures.setdefault(r.weekday, {})[r.slot[:2]] = num(r.per_hour)
+    ok = d["trips14"][d["trips14"].ok & (d["trips14"].group == group)]
+    dots = ok[ok.service_day == today].sort_values("left_a")
+    agg = ok.assign(h=hour_x(ok.left_a).astype(int)).groupby(["service_day", "h"]).ride_min.agg(["median", "size"])
+    return {
+        "name": group_name(group),
+        "live": {"window": live_window(now).split("–"), "ride": rounded(live_ride(d["trips14"], group, now)),
+                 "gap": rounded(live_gap(d["live_deps"], group, now)) if shown else None},
+        "typical": typical,
+        "best": {w: s for w in WEEKDAYS if (s := best_slots(c["plan"], direction, w, group))},
+        "worst": {w: s for w in WEEKDAYS if (s := best_slots(c["plan"], direction, w, group, "worst"))},
+        "departures": departures,
+        "today": [{"left": f"{r.left_a:%H:%M}", "ride": num(r.ride_min), "service": r.service,
+                   "est": bool(getattr(r, "estimated", False))} for r in dots.itertuples()],
+        "heatmap": {"days": list(c["days"]), "hours": [f"{h % 24:02d}" for h in HOURS],
+                    "median": [[num(agg["median"].get((day, h))) for h in HOURS] for day in c["days"]],
+                    "n": [[int(agg["size"].get((day, h), 0)) for h in HOURS] for day in c["days"]]},
+    }
+
+
+def data_json(c, now):
+    """The whole V2 data file as a dict (json.dumps-ready). `c` = compute() result, None before the first poll."""
+    today = service_day(now)
+    flags = C.day_flags(today)
+    out = {"schema_version": SCHEMA_VERSION, "generated_at": f"{now:%Y-%m-%dT%H:%M:%S}+08:00",
+           "service_day": today, "weekday": pd.Timestamp(today).strftime("%a"),
+           "calendar": {"ph": flags["sg_ph"] or flags["my_ph"], "ph_eve": flags["ph_eve"],
+                        "ph_last_day": flags["ph_last_day"], "names": flags["names"]},
+           "rules": {"quick_max": QUICK_MAX, "slow_min": SLOW_MIN, "min_days": ROUGH_DAYS,
+                     "min_trips": MIN_TRIPS_PER_SLOT},
+           "cameras": [{"id": cid, "name": name} for cid, name in CAMERAS],
+           "directions": {}}
+    if c is None:
+        return out
+    for direction, title in PAGES:
+        out["directions"][direction] = {
+            "title": title, "name": DIRECTIONS[direction]["name"], "berth": BERTH[direction],
+            "coverage": c["per_dir"][direction]["cover"],
+            "dates": {w: list(c["plan_dates"].get((direction, w), [])) for w in WEEKDAYS},
+            "groups": {group_key(g): group_json(c, direction, g) for g in BUS_ORDER}}
+    return out
+
+
 def main():
-    # build the page, write dashboard.html, and log one line (cron then uploads the file to the public bucket)
+    # compute once, write dashboard.html (V1) and data.json (V2), log one line (cron then uploads both files)
     start = time.time()
     now = datetime.now(SGT).replace(tzinfo=None, microsecond=0)
-    OUT.write_text(build(DB_PATH, now), encoding="utf-8")
+    c = compute(DB_PATH, now)
+    OUT.write_text(build_html(c, now), encoding="utf-8")
+    OUT_JSON.write_text(json.dumps(data_json(c, now), separators=(",", ":"), allow_nan=False), encoding="utf-8")
     print(f"{now} dashboard ok {time.time() - start:.1f}s", flush=True)
 
 

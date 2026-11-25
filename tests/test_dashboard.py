@@ -451,3 +451,83 @@ def test_coverage_strip_on_each_direction_page(tmp_path):
             f"{DAY} 05:30", f"{DAY} 18:00")
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 18:00:30"))
     assert html.count('<details class="cover">') == 2
+
+
+# ---------- V2: data.json (the page script draws everything from it) ----------
+
+def test_live_numbers_behind_the_right_now_tiles():
+    trips = pd.DataFrame([{"ok": True, "group": "160/170/170X", "ride_min": m,
+                           "reached_b": pd.Timestamp(f"{DAY} 14:{5 + 5 * i:02d}")} for i, m in enumerate((4, 6, 8))])
+    deps = pd.DataFrame([{"group": "160/170/170X", "left_a": pd.Timestamp(f"{DAY} {t}")}
+                         for t in ("13:10", "13:30", "13:34", "13:44", "14:00")])
+    now = pd.Timestamp(f"{DAY} 14:20")
+    assert D.live_ride(trips, "160/170/170X", now) == {"median": 6.0, "n": 3}
+    assert D.live_ride(trips, "950", now) is None
+    assert D.live_gap(deps, "160/170/170X", now) == {"median": 10.0, "n": 4}  # n = buses, as the V1 tile says
+    assert D.live_gap(deps, "950", now) is None
+
+
+def test_data_json_empty_db(tmp_path):
+    db = tmp_path / "causeway.db"
+    open_db(db).close()
+    now = datetime.fromisoformat(f"{DAY} 12:00")
+    d = D.data_json(D.compute(db, now), now)
+    assert d["schema_version"] == D.SCHEMA_VERSION and d["directions"] == {}
+    assert d["generated_at"] == f"{DAY}T12:00:00+08:00"
+
+
+def simulated_data(tmp_path):
+    db = tmp_path / "causeway.db"
+    buses = (random_buses(40, service="170", first="2026-10-08 06:00", headway=(10, 20), seed=1)
+             + random_buses(25, service="950", first="2026-10-08 06:00", headway=(40, 70), seed=2))
+    fill_db(db, buses, "2026-10-08 05:30", f"{DAY} 18:00")
+    now = datetime.fromisoformat(f"{DAY} 18:00:30")
+    c = D.compute(db, now)
+    return c, D.data_json(c, now)
+
+
+def test_data_json_contract(tmp_path):
+    import json
+    c, d = simulated_data(tmp_path)
+    json.dumps(d, allow_nan=False)  # valid JSON for the browser: no NaN anywhere
+    assert {"schema_version", "generated_at", "service_day", "weekday", "calendar", "rules", "cameras",
+            "directions"} <= set(d)
+    assert (d["service_day"], d["weekday"]) == (DAY, "Fri")
+    assert set(d["calendar"]) == {"ph", "ph_eve", "ph_last_day", "names"}
+    assert d["rules"] == {"quick_max": 10, "slow_min": 25, "min_days": 3, "min_trips": D.MIN_TRIPS_PER_SLOT}
+    assert [x["id"] for x in d["cameras"]] == [cid for cid, _ in D.CAMERAS]
+    assert list(d["directions"]) == [p for p, _ in D.PAGES]
+    for direction, page in d["directions"].items():
+        assert {"title", "name", "berth", "coverage", "dates", "groups"} <= set(page)
+        assert list(page["groups"]) == [D.group_key(g) for g in D.BUS_ORDER]
+        for g in page["groups"].values():
+            assert {"name", "live", "typical", "best", "worst", "departures", "today", "heatmap"} <= set(g)
+            assert set(g["live"]) == {"window", "ride", "gap"}
+            for live in (g["live"]["ride"], g["live"]["gap"]):
+                assert live is None or live["median"] == round(live["median"], 1)  # 0.1 min, like every figure
+            assert len(g["heatmap"]["hours"]) == len(D.HOURS) == len(g["heatmap"]["median"][0])
+            assert len(g["heatmap"]["days"]) == len(g["heatmap"]["median"]) == len(g["heatmap"]["n"])
+            for hours in g["typical"].values():
+                for slot in hours.values():
+                    for stat in slot.values():
+                        assert set(stat) >= {"median", "p25", "p75", "n", "days"}
+                        assert stat["p25"] <= stat["median"] <= stat["p75"] and stat["n"] >= D.MIN_TRIPS_PER_SLOT
+
+
+def test_data_json_matches_the_v1_numbers(tmp_path):
+    """V1 and V2 read the same compute() result, so the Typical figures must agree slot by slot."""
+    c, d = simulated_data(tmp_path)
+    for direction in d["directions"]:
+        v1 = D.typical_data(direction, c["plan"], c["per_dir"][direction]["waits"])  # '<grp>|<day>|<HH>' -> [gap, n, ride, n]
+        for key, (gap, ngap, ride, nride) in v1.items():
+            grp, day, hh = key.split("|")
+            slot = d["directions"][direction]["groups"][grp]["typical"][day][hh]
+            assert (slot.get("ride", {}).get("median"), slot.get("ride", {}).get("n")) == (ride, nride)
+            assert (slot.get("gap", {}).get("median"), slot.get("gap", {}).get("n")) == (gap, ngap)
+
+
+def test_data_json_gap_only_where_v1_shows_it(tmp_path):
+    c, d = simulated_data(tmp_path)
+    g = d["directions"]["jb-sg"]["groups"]["950"]
+    assert ("jb-sg", "950") not in D.GAP_SHOWN
+    assert g["live"]["gap"] is None and all("gap" not in s for h in g["typical"].values() for s in h.values())
