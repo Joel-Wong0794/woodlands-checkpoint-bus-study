@@ -216,7 +216,7 @@ def bus_gaps(departures, gaps, direction="jb-sg"):
     polling gap and special days are left out.
     """
     # This is the "A bus every N min" figure. Example: departures 08:04, 08:10, 08:10, 08:25 -> gaps 6, 0, 15.
-    cols = ["direction", "weekday", "group", "slot", "n", "median", "p25", "p75"]
+    cols = ["direction", "weekday", "group", "slot", "n", "median", "p25", "p75", "days"]  # days = service days behind it
     t = departures[~departures.special.astype(bool)] if "special" in departures else departures
     if "day_type" in t:
         t = t[t.day_type != "holiday"]
@@ -234,8 +234,9 @@ def bus_gaps(departures, gaps, direction="jb-sg"):
     # each gap counts in the hour the earlier bus left; then median and middle half per weekday x hour (n >= 3)
     s = t.assign(weekday=pd.to_datetime(t.service_day).dt.strftime("%a"), direction=direction,
                  slot=t.start.dt.floor(f"{SLOT_MIN}min").dt.strftime("%H:%M"))
-    s = s.groupby(["direction", "weekday", "group", "slot"]).gap_min.agg(
-        n="size", median="median", p25=lambda x: x.quantile(.25), p75=lambda x: x.quantile(.75)).reset_index()
+    s = s.groupby(["direction", "weekday", "group", "slot"]).agg(
+        n=("gap_min", "size"), median=("gap_min", "median"), p25=("gap_min", lambda x: x.quantile(.25)),
+        p75=("gap_min", lambda x: x.quantile(.75)), days=("service_day", "nunique")).reset_index()
     return s[s.n >= MIN_TRIPS_PER_SLOT][cols].reset_index(drop=True)
 
 
@@ -876,15 +877,16 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
     return "\n".join(out)
 
 
-def build(db_path, now):
-    """The whole page as HTML. `now` is naive Singapore time."""
+def compute(db_path, now):
+    """Everything the pages show, as data (no HTML), or None before the first poll. `now` is naive Singapore time.
+
+    Runs the trip maths once per build; V1 (build -> dashboard.html) and V2 (data.json) both read from it."""
     # Step 1: load the last PLAN_DAYS (28) service days of raw data
     today = service_day(now)
     plan_days = [(pd.Timestamp(today) - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(PLAN_DAYS)]
     runs, polls = load(db_path, f"{plan_days[-1]} {SERVICE_DAY_START_HOUR:02d}:00:00")
     if runs.empty:
-        return page("<p><b>No data yet.</b> The collector hasn't stored any polls in this window.</p>",
-                    f"updated {now:%H:%M}")
+        return None
     first = service_day(runs.polled_at.min())
     days = [d for d in plan_days[:DASH_DAYS] if d >= first]  # newest first
 
@@ -903,8 +905,27 @@ def build(db_path, now):
     all_deps = {d: T.find_departures(all_tracks[d], d) for d in DIRECTIONS}
     for dep in all_deps.values():
         dep["day_type"], dep["special"] = dep.service_day.map(day_type), dep.service_day.map(special_day)
+    # Step 4: per direction, the gap between buses, buses per hour, the last 14 days' trips and polling coverage
+    per_dir = {}
+    for direction in DIRECTIONS:
+        mine = all_trips[all_trips.direction == direction]
+        per_dir[direction] = {
+            "waits": bus_gaps(all_deps[direction], T.poll_gaps(runs, direction), direction),
+            "deps": departures_per_hour(all_deps[direction], runs, direction),
+            "trips14": mine[mine.service_day.isin(days)].reset_index(drop=True),
+            "live_deps": all_deps[direction],
+            "cover": coverage(runs, direction, plan_days, now)}
+    return {"now": now, "today": today, "days": days, "plan": plan, "plan_dates": plan_dates, "per_dir": per_dir}
 
-    # Step 4: the HTML: top bar (direction and bus buttons), live cameras, then one section per direction
+
+def build(db_path, now):
+    """The whole V1 page as HTML. `now` is naive Singapore time."""
+    c = compute(db_path, now)
+    if c is None:
+        return page("<p><b>No data yet.</b> The collector hasn't stored any polls in this window.</p>",
+                    f"updated {now:%H:%M}")
+
+    # The HTML: top bar (direction and bus buttons), live cameras, then one section per direction
     body = ['<div class="bar"><div class="dirs" data-default="sg-jb">'
             + "".join(f'<button type="button" data-dir="{d}" aria-pressed="false">{title}'
                       f'<small>{DIRECTIONS[d]["name"]}</small></button>' for d, title in PAGES)
@@ -918,12 +939,10 @@ def build(db_path, now):
                           '<span class="when">loading…</span></figcaption></figure>' for cid, name in CAMERAS)
                 + '</div><p class="note">Cameras: LTA, via data.gov.sg · tap to enlarge</p>' + LIGHTBOX_HTML)
     for direction, title in PAGES:
-        mine = all_trips[all_trips.direction == direction]
+        d = c["per_dir"][direction]
         body.append(f'<section class="dirpage" data-dir="{direction}" hidden>')
-        body.append(page_html(direction, plan, plan_dates, bus_gaps(all_deps[direction], T.poll_gaps(runs, direction), direction),
-                              departures_per_hour(all_deps[direction], runs, direction),
-                              mine[mine.service_day.isin(days)].reset_index(drop=True), days, now, today,
-                              all_deps[direction], coverage(runs, direction, plan_days, now)))
+        body.append(page_html(direction, c["plan"], c["plan_dates"], d["waits"], d["deps"], d["trips14"], c["days"],
+                              now, c["today"], d["live_deps"], d["cover"]))
         body.append("</section>")
     return page("\n".join(body), f"JB ⇄ Singapore checkpoints · updated {now:%H:%M}")
 

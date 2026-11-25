@@ -208,6 +208,18 @@ def test_empty_db(tmp_path):
     open_db(db).close()
     html = D.build(db, now=datetime.fromisoformat(f"{DAY} 12:00"))
     assert "No data yet" in html
+    assert D.compute(db, now=datetime.fromisoformat(f"{DAY} 12:00")) is None
+
+
+def test_compute_gives_data_for_both_directions(tmp_path):
+    """compute() is the data behind both pages (V1 HTML, V2 data.json): one entry per direction, with `days` counts."""
+    db = tmp_path / "causeway.db"
+    fill_db(db, random_buses(30, service="170", first=f"{DAY} 06:00", headway=(5, 10), seed=16), f"{DAY} 05:30",
+            f"{DAY} 12:00")
+    c = D.compute(db, now=datetime.fromisoformat(f"{DAY} 12:00:30"))
+    assert set(c["per_dir"]) == set(D.DIRECTIONS) and c["today"] == DAY
+    assert {"waits", "deps", "trips14", "live_deps", "cover"} <= set(c["per_dir"]["jb-sg"])
+    assert len(c["plan"]) and (c["plan"].days >= 1).all()
 
 
 def test_best_worst():
@@ -240,6 +252,16 @@ def test_bus_gaps_between_any_bus_of_the_group():
     r = s[(s.group == "160/170/170X") & (s.weekday == "Fri") & (s.slot == "17:00")].iloc[0]
     assert (r.direction, r.n, r["median"], r.p25, r.p75) == ("jb-sg", 7, 5, 2, 6.5)
     assert s[s.group == "950"].empty  # one gap only
+
+
+def test_bus_gaps_days_counts_distinct_service_days():
+    """`days` = how many different days a gap figure comes from; a gap never spans two service days."""
+    later = str((pd.Timestamp(DAY) + pd.Timedelta(days=7)).date())  # the same weekday a week later
+    rows = [{"service": "170", "group": "160/170/170X", "service_day": d, "left_a": pd.Timestamp(f"{d} {t}"), "ok": True}
+            for d in (DAY, later) for t in ("17:00", "17:10", "17:20")]
+    s = D.bus_gaps(pd.DataFrame(rows), pd.DataFrame(columns=["stop", "gap_from", "gap_to"]))
+    assert list(s.columns) == ["direction", "weekday", "group", "slot", "n", "median", "p25", "p75", "days"]
+    assert (s.iloc[0].n, s.iloc[0].days) == (4, 2)
 
 
 def test_bus_gaps_go_to_the_hour_the_first_bus_left():

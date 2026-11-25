@@ -432,12 +432,22 @@ def test_slot_stats():
         rows.append({"service": "170", "service_day": DAY, "left_a": pd.Timestamp("2026-10-10 01:20"),
                      "ride_min": ride, "ok": True})
     s = slot_stats(pd.DataFrame(rows))
-    assert list(s.columns) == ["group", "weekday", "slot", "n", "median", "p25", "p75", "est"]
+    assert list(s.columns) == ["group", "weekday", "slot", "n", "median", "p25", "p75", "est", "days"]
     assert len(s) == 1
     r = s.iloc[0]
+    assert r.days == 1  # all 4 rides on one service day
     assert r.est == 0  # no `estimated` column in the input = none estimated
     assert (r.group, r.weekday, r.slot, r.n, r["median"], r.p25, r.p75) == ("160/170/170X", "Fri", "07:00", 4, 25, 17.5, 32.5)
     assert slot_stats(pd.DataFrame(rows), by=("slot",), slot_min=30).empty  # 2 + 2 trips: both slots too thin
+
+
+def test_slot_stats_days_counts_distinct_service_days():
+    """`days` = how many different days a slot's figure comes from (V2 shows "from N days"; < 3 = rough)."""
+    days = ("2026-10-09", "2026-10-16", "2026-10-16", "2026-10-23")  # 3 Fridays, one with 2 rides
+    rows = [{"service": "170", "service_day": d, "left_a": pd.Timestamp(f"{d} 07:{10 + i}"), "ride_min": 10 + i,
+             "ok": True} for i, d in enumerate(days)]
+    r = slot_stats(pd.DataFrame(rows)).iloc[0]
+    assert (r.n, r.days) == (4, 3)
 
 
 def test_slot_stats_pools_a_group_not_950():
