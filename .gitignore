@@ -5,6 +5,7 @@ data/*.db-shm
 logs/
 dashboard.html
 data.json
+web/data.json
 .venv/
 __pycache__/
 .pytest_cache/

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Causeway Bus Times</title>
+<meta name="description" content="How long the JB ⇄ Singapore checkpoint buses take right now and on a typical day, from LTA live bus GPS.">
+<!-- dark by default; a saved choice from the theme button wins (set before the CSS paints, so no flash) -->
+<script>try { var t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<!-- uPlot: small chart library, exact version + integrity hash (the browser refuses a changed file) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.min.css"
+      integrity="sha256-32MMao1vjur/JktQ9zzlsRT2Rv/ZoLt08EmwoAE1+gQ=" crossorigin="anonymous">
+<link rel="stylesheet" href="app.css">
+<script defer src="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.iife.min.js"
+        integrity="sha256-GcjUxq2Ikpp59K5J1vcWFWbf0Lo9FcxJXpdPeH63jx8=" crossorigin="anonymous"></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Causeway bus times</h1>
+      <p class="sub" id="updated">Loading…</p>
+    </div>
+    <button type="button" class="themebtn" id="theme" aria-label="Switch to light theme">Light</button>
+  </header>
+
+  <div class="bar">
+    <div class="seg dirs" id="dirs" role="group" aria-label="Direction"></div>
+    <div class="seg grps" id="grps" role="group" aria-label="Bus"></div>
+  </div>
+  <p class="msg" id="msg" hidden></p>
+
+  <section id="now" aria-labelledby="now-h"></section>
+
+  <section aria-labelledby="cams-h">
+    <h2 id="cams-h">Live cameras</h2>
+    <div class="cams" id="cams"></div>
+    <p class="note">Cameras: LTA, via data.gov.sg · tap to enlarge</p>
+  </section>
+
+  <section id="plan" aria-labelledby="plan-h">
+    <h2 id="plan-h">Plan your day</h2>
+    <p class="note">Select a day and hour to see typical wait (past 4 weeks)</p>
+    <div class="days" id="days" role="group" aria-label="Day of the week"></div>
+    <label class="hourpick">Hour <select id="hour"></select></label>
+    <details class="cover" id="cover"><summary></summary><div class="covgrid"></div>
+      <p class="note"><span class="key full"></span> complete <span class="key part"></span> partial
+      <span class="key miss"></span> missing · ★ public holiday · share of minutes LTA was polled</p></details>
+    <div id="typical"></div>
+    <div class="tabs" id="tabs" role="group" aria-label="Show">
+      <button type="button" data-tab="wait" aria-pressed="true">Waiting at the berth</button>
+      <button type="button" data-tab="ride" aria-pressed="false">Ride across Causeway</button>
+    </div>
+    <div id="panel"></div>
+  </section>
+
+  <footer>
+    <p class="note"><b>How it's measured:</b> from LTA live bus GPS, every minute, timed checkpoint to checkpoint.
+      Bus ride only: immigration queues are not included.</p>
+  </footer>
+</main>
+
+<dialog class="lb" aria-label="Camera image">
+  <div class="cap"></div><button type="button" class="close" aria-label="Close">✕</button>
+  <div class="stage"><img alt=""></div>
+  <div class="tools"><button type="button" data-zoom="out" aria-label="Zoom out">−</button>
+    <button type="button" data-zoom="reset">Reset</button>
+    <button type="button" data-zoom="in" aria-label="Zoom in">+</button></div>
+</dialog>
+</body>
+</html>

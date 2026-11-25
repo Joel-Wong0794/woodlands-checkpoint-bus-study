@@ -28,6 +28,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m pytest -q
+      # V2 page logic (web/logic.js): Node's built-in test runner, no npm packages
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test tests/test_web.mjs
 
   release:
     needs: test   # only runs if every test passed

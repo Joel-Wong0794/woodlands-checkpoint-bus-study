@@ -494,14 +494,19 @@ def test_data_json_contract(tmp_path):
             "directions"} <= set(d)
     assert (d["service_day"], d["weekday"]) == (DAY, "Fri")
     assert set(d["calendar"]) == {"ph", "ph_eve", "ph_last_day", "names"}
-    assert d["rules"] == {"quick_max": 10, "slow_min": 25, "min_days": 3, "min_trips": D.MIN_TRIPS_PER_SLOT}
+    assert d["rules"] == {"quick_max": 10, "slow_min": 25, "min_days": 3, "min_trips": D.MIN_TRIPS_PER_SLOT,
+                          "cover_full": D.COVER_FULL, "cover_part": D.COVER_PART}
+    assert isinstance(d["ph_dates"], list)
+    # JavaScript lists number-like object keys ("950") first, so the bus order is stated explicitly
+    assert d["group_order"] == [D.group_key(g) for g in D.BUS_ORDER]
     assert [x["id"] for x in d["cameras"]] == [cid for cid, _ in D.CAMERAS]
     assert list(d["directions"]) == [p for p, _ in D.PAGES]
     for direction, page in d["directions"].items():
         assert {"title", "name", "berth", "coverage", "dates", "groups"} <= set(page)
         assert list(page["groups"]) == [D.group_key(g) for g in D.BUS_ORDER]
         for g in page["groups"].values():
-            assert {"name", "live", "typical", "best", "worst", "departures", "today", "heatmap"} <= set(g)
+            assert {"name", "gap_shown", "live", "typical", "best", "worst", "best_text", "departures", "today",
+                    "heatmap"} <= set(g)
             assert set(g["live"]) == {"window", "ride", "gap"}
             for live in (g["live"]["ride"], g["live"]["gap"]):
                 assert live is None or live["median"] == round(live["median"], 1)  # 0.1 min, like every figure
@@ -531,3 +536,13 @@ def test_data_json_gap_only_where_v1_shows_it(tmp_path):
     g = d["directions"]["jb-sg"]["groups"]["950"]
     assert ("jb-sg", "950") not in D.GAP_SHOWN
     assert g["live"]["gap"] is None and all("gap" not in s for h in g["typical"].values() for s in h.values())
+
+
+def test_data_json_best_text_and_holidays(tmp_path):
+    """The page prints V1's "Fastest ... · Slowest ..." line as is, and marks public holidays in the window with ★."""
+    c, d = simulated_data(tmp_path)
+    g = d["directions"]["jb-sg"]["groups"]["160-170-170X"]
+    for w, text in g["best_text"].items():
+        assert text == D.best_text(c["plan"], "jb-sg", w, "160/170/170X") and text
+    assert g["gap_shown"] is True and d["directions"]["jb-sg"]["groups"]["950"]["gap_shown"] is False
+    assert D.ph_dates(["2026-12-24", "2026-12-25", "2026-12-26"]) == ["2026-12-25"]  # Christmas, SG and Johor
