@@ -56,6 +56,8 @@ button { cursor: pointer; transition: background-color .15s ease, color .15s eas
 .warn { margin: 8px 0 0; padding: 8px 12px; border-left: 4px solid var(--moderate); background: var(--tile);
   border-radius: 8px; font-size: 14px; }
 .warn[hidden] { display: none; }
+.warn.stale { border-left-color: var(--slow); }
+.topbtns { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* the "now + 3 hours" strip: 4 blocks in one row, big numbers */
 .striph { margin-top: 20px; }

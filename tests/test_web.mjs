@@ -143,3 +143,36 @@ test("holiday warning line", () => {
   assert.equal(L.warningText(cal({ ph_last_day: true }), "jb-sg"), "Last day of a long weekend: the return may be busier");
   assert.equal(L.warningText(cal({ ph_last_day: true }), "sg-jb"), "");  // the return crush is JB -> SG only
 });
+
+// ---------- step 4: stale data line, home-screen install ----------
+
+test("age of the data in minutes, from data.json's generated_at (+08:00)", () => {
+  const now = new Date("2026-11-26T07:47:30Z");  // 15:47:30 SGT
+  assert.equal(L.ageMinutes("2026-11-26T15:30:07+08:00", now), 17);
+  assert.equal(L.ageMinutes("not a date", now), null);
+});
+
+test("stale line only when the data is over 30 min old", () => {
+  assert.equal(L.staleText(29), "");
+  assert.equal(L.staleText(null), "");
+  assert.equal(L.staleText(47), "Data is 47 min old. Collection may be paused.");
+  assert.equal(L.staleText(185), "Data is 3 h old. Collection may be paused.");
+});
+
+test("home-screen manifest points at icons that exist, at the stated sizes", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const m = JSON.parse(await readFile(new URL("../web/manifest.json", import.meta.url), "utf8"));
+  assert.equal(m.display, "standalone");
+  assert.equal(m.start_url, "index.html");
+  for (const icon of m.icons) {
+    const png = await readFile(new URL(`../web/${icon.src}`, import.meta.url));
+    assert.equal(png.toString("latin1", 1, 4), "PNG");  // PNG signature
+    const [w, h] = [png.readUInt32BE(16), png.readUInt32BE(20)];  // IHDR width, height
+    assert.equal(`${w}x${h}`, icon.sizes);
+  }
+});
+
+test("stale data: the Now block stops claiming to be live and shows the usual figure", () => {
+  const b = L.stripBlocks(G, { hour: 18, day: "Fri", rules: RULES, stale: true });
+  assert.deepEqual([b[0].kind, b[0].ride, b[0].basis], ["usual", 21, "4 days"]);
+});
