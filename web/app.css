@@ -48,6 +48,35 @@ button { cursor: pointer; transition: background-color .15s ease, color .15s eas
 .dirs button { min-height: 52px; }
 .dirs small { display: block; font-size: 12px; opacity: .85; font-weight: 400; }
 
+/* status colours (Quick / Moderate / Slow): always paired with the word, never colour alone */
+:root, :root[data-theme="dark"] { --quick: #3fbf8a; --moderate: #e3a33b; --slow: #f07a7a; }
+:root[data-theme="light"] { --quick: #11704c; --moderate: #8a5600; --slow: #bb2a2a; }
+
+/* holiday warning line */
+.warn { margin: 8px 0 0; padding: 8px 12px; border-left: 4px solid var(--moderate); background: var(--tile);
+  border-radius: 8px; font-size: 14px; }
+.warn[hidden] { display: none; }
+
+/* the "now + 3 hours" strip: 4 blocks in one row, big numbers */
+.striph { margin-top: 20px; }
+.strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.blk { text-align: left; background: var(--tile); border: 0; border-top: 4px solid var(--line); border-radius: 12px;
+  padding: 8px 8px 10px; color: var(--ink); min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.blk.quick { border-top-color: var(--quick); } .blk.moderate { border-top-color: var(--moderate); }
+.blk.slow { border-top-color: var(--slow); }
+.blk .t { font-size: 14px; font-weight: 650; white-space: nowrap; }
+.blk .src { font-size: 11px; color: var(--ink2); }
+.blk .big { font-size: 34px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.blk .big small { font-size: 13px; font-weight: 500; margin-left: 2px; }
+.blk .st { font-size: 13px; font-weight: 650; }
+.blk.quick .st { color: var(--quick); } .blk.moderate .st { color: var(--moderate); } .blk.slow .st { color: var(--slow); }
+.blk .ev, .blk .ba { font-size: 12px; color: var(--ink2); line-height: 1.35; }
+.blk.rough .big, .blk.rough .st { opacity: .55; }
+.blk.rough { border-top-style: dashed; }
+.blk:disabled { cursor: default; }
+.howto ul { margin: 4px 0 0; padding-left: 18px; }
+.howto li { margin: 2px 0; }
+
 /* tiles */
 .tilehead { font-weight: 600; margin: 16px 0 8px; }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -50,7 +50,10 @@ async function load() {
   }
   if (!r.ok) { if (!data) showMsg("No data yet."); return; }
   const v = r.headers.get("etag") || r.headers.get("last-modified");
-  if (data && v && v === version) return;  // unchanged since the last check
+  if (data && v && v === version) {  // unchanged since the last check; a new hour still moves the strip on
+    if (nowParts().hour !== renderedHour) render();
+    return;
+  }
   let next;
   try { next = await r.json(); } catch (e) { return; }
   if (next.schema_version !== SCHEMA) { showMsg("This page is out of date. Reload to update it."); return; }
@@ -98,7 +101,7 @@ function render() {
   showMsg("");
   const page = data.directions[state.dir], g = page.groups[state.grp];
   renderBar();
-  renderNow(g);
+  renderStrip(g);
   renderCams();
   renderPlanControls(page);
   renderTypical(page, g);
@@ -127,14 +130,30 @@ function tile(label, value, note) {
     h("p", { class: "note", text: note }));
 }
 
-// Right now: the hour before the build (live)
-function renderNow(g) {
-  const live = g.live;
-  const gap = !g.gap_shown ? ["—", "not enough data yet"]
-    : live.gap ? [L.minText(live.gap.median), `from ${live.gap.n} buses`] : ["—", "not enough buses seen"];
-  const ride = live.ride ? [L.minText(live.ride.median), `from ${live.ride.n} trips`] : ["—", "no trips seen"];
-  $("#now").replaceChildren(h("p", { class: "tilehead", id: "now-h", text: `Right now (${live.window.join("–")})` }),
-    h("div", { class: "tiles" }, tile("Bus every", ...gap), tile("Ride", ...ride)));
+// Now and next 3 hours: now = live (the hour before the build), later hours = the usual for today's weekday.
+// The maths of which figure goes where is in logic.js (stripBlocks, tested); this only draws it.
+let renderedHour = null;
+function renderStrip(g) {
+  const now = nowParts();
+  renderedHour = now.hour;
+  const warn = L.warningText(data.calendar, state.dir);
+  $("#warn").hidden = !warn;
+  $("#warn").textContent = warn;
+  $("#strip").replaceChildren(...L.stripBlocks(g, { hour: now.hour, day: now.day, rules: data.rules }).map(b => {
+    const cls = ["blk", b.status ? b.status.key : "none", b.rough ? "rough" : ""].filter(Boolean).join(" ");
+    const src = b.kind === "live" ? "live" : b.kind === "usual" ? "usually" : "";
+    const ride = b.ride === null ? "—" : String(Math.round(b.ride));
+    const label = [b.label, src, b.ride === null ? b.basis : `${ride} min ride, ${b.status.word}`,
+      b.gap === null ? "" : `a bus every ${Math.round(b.gap)} min`, b.ride === null ? "" : `based on ${b.basis}`]
+      .filter(Boolean).join(", ");
+    return h("button", { type: "button", class: cls, "data-strip": b.hh, disabled: !L.HOURS.includes(b.hh),
+      "aria-label": label },
+      h("span", { class: "t", text: b.label }), h("span", { class: "src", text: src || " " }),
+      h("span", { class: "big" }, ride, b.ride === null ? null : h("small", { text: "min" })),
+      h("span", { class: "st", text: b.status ? b.status.word : " " }),
+      h("span", { class: "ev", text: b.gap === null ? "" : `every ${Math.round(b.gap)} min` }),
+      h("span", { class: "ba", text: b.basis }));
+  }));
 }
 
 let camsBuilt = false;
@@ -469,6 +488,11 @@ document.addEventListener("click", e => {
   else if (b.dataset.grp) setState({ grp: b.dataset.grp }, true);
   else if (b.dataset.day) setState({ day: b.dataset.day });
   else if (b.dataset.tab) setState({ tab: b.dataset.tab });
+  else if (b.dataset.strip) {  // an hour in the strip: show it in Plan your day (today, that hour, the ride chart)
+    setState({ day: nowParts().day, hour: b.dataset.strip, tab: "ride" });
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("#typical").scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }
 });
 $("#hour").addEventListener("change", e => setState({ hour: e.target.value }));
 // a share link opened in a tab that already shows the page: apply it (replaceState in setState doesn't fire this)
