@@ -137,14 +137,15 @@ export function statusOf(min, rules) {
 // Four blocks: now (live: the last hour's trips; if none, the usual figure for this hour), then the next 3 hours
 // (the usual figure for today's weekday at that hour, past 4 weeks). g = one bus group from data.json.
 // Hours belong to the service day, so at 00:30 "now" is still the evening's weekday; past 01:00 there are no buses.
-export function stripBlocks(g, { hour, day, rules }) {
+// stale = the data is over 30 min old: then the "live" figures are old too, so Now shows the usual instead.
+export function stripBlocks(g, { hour, day, rules, stale = false }) {
   const byHour = (g.typical && g.typical[day]) || {};
   const blocks = [];
   for (let i = 0; i < 4; i++) {
     const hh = pad((hour + i) % 24);
     const b = { hh, label: i === 0 ? "Now" : `${hh}:00`, kind: "none", ride: null, gap: null, status: null,
       basis: "", rough: false };
-    if (i === 0 && g.live && g.live.ride) {
+    if (i === 0 && !stale && g.live && g.live.ride) {
       Object.assign(b, { kind: "live", ride: g.live.ride.median, basis: `${g.live.ride.n} trips`,
         gap: g.gap_shown && g.live.gap ? g.live.gap.median : null });
     } else if (!HOURS.includes(hh)) {
@@ -170,4 +171,19 @@ export function warningText(calendar, dir) {
   if (calendar.ph_eve) return "Holiday tomorrow: may be busier";
   if (calendar.ph_last_day && dir === "jb-sg") return "Last day of a long weekend: the return may be busier";
   return "";
+}
+
+// ---------- stale data (step 4) ----------
+
+// minutes since data.json was built ("2026-11-26T15:30:07+08:00"), or null if the time can't be read
+export function ageMinutes(generatedAt, now = new Date()) {
+  const t = Date.parse(generatedAt);
+  return Number.isNaN(t) ? null : Math.floor((now.getTime() - t) / 60000);
+}
+
+// a build every 15 min (taking up to ~10) means data over 30 min old is a missed build: say so, plainly
+export function staleText(age) {
+  if (age === null || age <= 30) return "";
+  const when = age < 120 ? `${age} min` : `${Math.floor(age / 60)} h`;
+  return `Data is ${when} old. Collection may be paused.`;
 }

@@ -6,6 +6,12 @@
 <meta name="color-scheme" content="dark light">
 <title>Causeway Bus Times</title>
 <meta name="description" content="How long the JB ⇄ Singapore checkpoint buses take right now and on a typical day, from LTA live bus GPS.">
+<!-- add to home screen: opens like an app (no offline mode: stale bus data offline would mislead) -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#1a1a19">
+<meta name="apple-mobile-web-app-title" content="Causeway Bus">
 <!-- dark by default; a saved choice from the theme button wins (set before the CSS paints, so no flash) -->
 <script>try { var t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <!-- uPlot: small chart library, exact version + integrity hash (the browser refuses a changed file) -->
@@ -23,7 +29,10 @@
       <h1>Causeway bus times</h1>
       <p class="sub" id="updated">Loading…</p>
     </div>
-    <button type="button" class="themebtn" id="theme" aria-label="Switch to light theme">Light</button>
+    <div class="topbtns">
+      <button type="button" class="themebtn" id="share" aria-label="Share a link to this view">Share</button>
+      <button type="button" class="themebtn" id="theme" aria-label="Switch to light theme">Light</button>
+    </div>
   </header>
 
   <div class="bar">
@@ -32,6 +41,7 @@
   </div>
   <p class="msg" id="msg" hidden></p>
 
+  <p class="warn stale" id="stale" role="status" hidden></p>
   <p class="warn" id="warn" role="status" hidden></p>
 
   <section aria-labelledby="strip-h">

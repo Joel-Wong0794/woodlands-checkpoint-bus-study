@@ -51,7 +51,8 @@ async function load() {
   if (!r.ok) { if (!data) showMsg("No data yet."); return; }
   const v = r.headers.get("etag") || r.headers.get("last-modified");
   if (data && v && v === version) {  // unchanged since the last check; a new hour still moves the strip on
-    if (nowParts().hour !== renderedHour) render();
+    renderStale();  // the data's age keeps growing even when nothing new arrives
+    if (nowParts().hour !== renderedHour || isStale() !== renderedStale) render();
     return;
   }
   let next;
@@ -97,6 +98,7 @@ function render() {
   if (!data) return;
   const updated = data.generated_at.slice(11, 16);
   $("#updated").textContent = `JB ⇄ Singapore checkpoints · updated ${updated}`;
+  renderStale();
   if (!dirKeys().length) { showMsg("No data yet. The collector hasn't stored any polls in this window."); return; }
   showMsg("");
   const page = data.directions[state.dir], g = page.groups[state.grp];
@@ -132,14 +134,16 @@ function tile(label, value, note) {
 
 // Now and next 3 hours: now = live (the hour before the build), later hours = the usual for today's weekday.
 // The maths of which figure goes where is in logic.js (stripBlocks, tested); this only draws it.
-let renderedHour = null;
+let renderedHour = null, renderedStale = null;
+const isStale = () => !!(data && L.staleText(L.ageMinutes(data.generated_at)));
 function renderStrip(g) {
   const now = nowParts();
   renderedHour = now.hour;
+  renderedStale = isStale();
   const warn = L.warningText(data.calendar, state.dir);
   $("#warn").hidden = !warn;
   $("#warn").textContent = warn;
-  $("#strip").replaceChildren(...L.stripBlocks(g, { hour: now.hour, day: now.day, rules: data.rules }).map(b => {
+  $("#strip").replaceChildren(...L.stripBlocks(g, { hour: now.hour, day: now.day, rules: data.rules, stale: renderedStale }).map(b => {
     const cls = ["blk", b.status ? b.status.key : "none", b.rough ? "rough" : ""].filter(Boolean).join(" ");
     const src = b.kind === "live" ? "live" : b.kind === "usual" ? "usually" : "";
     const ride = b.ride === null ? "—" : String(Math.round(b.ride));
@@ -463,6 +467,34 @@ function lightbox() {
 
 // ---------- theme ----------
 
+// "Data is 47 min old": the VM builds every 15 min, so older data means collection or the upload has stalled
+function renderStale() {
+  const text = data ? L.staleText(L.ageMinutes(data.generated_at)) : "";
+  $("#stale").hidden = !text;
+  $("#stale").textContent = text;
+}
+
+// ---------- share ----------
+
+// the link to exactly this view (direction, bus, and day / tab / hour when not the defaults); the phone's share
+// sheet where there is one, else copy to the clipboard
+function shareButton() {
+  const btn = $("#share");
+  btn.addEventListener("click", async () => {
+    const now = nowParts();
+    const url = location.origin + location.pathname + (data ? L.formatHash(state, { day: now.day, hour: now.hh }) : "");
+    try {
+      if (navigator.share) { await navigator.share({ title: "Causeway bus times", url }); return; }
+      await navigator.clipboard.writeText(url);
+      btn.textContent = "Copied";
+      setTimeout(() => { btn.textContent = "Share"; }, 2000);
+    } catch (e) {
+      if (e && e.name === "AbortError") return;  // the share sheet was closed
+      showMsg(`Copy this link: ${url}`);
+    }
+  });
+}
+
 function themeButton() {
   const btn = $("#theme"), root = document.documentElement;
   const label = () => {
@@ -503,6 +535,7 @@ window.addEventListener("hashchange", () => {
 });
 
 themeButton();
+shareButton();
 lightbox();
 load();
 setInterval(load, 60000);  // a new data.json is uploaded every 15 min; checking every minute keeps "now" fresh
