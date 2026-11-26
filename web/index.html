@@ -32,7 +32,21 @@
   </div>
   <p class="msg" id="msg" hidden></p>
 
-  <section id="now" aria-labelledby="now-h"></section>
+  <p class="warn" id="warn" role="status" hidden></p>
+
+  <section aria-labelledby="strip-h">
+    <h2 id="strip-h" class="striph">Now and next 3 hours</h2>
+    <div class="strip" id="strip"></div>
+    <details class="howto"><summary>How to read this</summary>
+      <ul class="note">
+        <li><b>Now</b>: median ride of buses that arrived in the last hour (live).</li>
+        <li><b>Later hours</b>: usually, the median for this weekday and hour over the past 4 weeks.</li>
+        <li><b>N days</b>: how many days a figure is based on. Under 3 is rough.</li>
+        <li><b>Quick</b> under 10 min · <b>Moderate</b> 10–25 · <b>Slow</b> over 25. Bus ride only, not immigration.</li>
+        <li>Tap an hour to see it in Plan your day.</li>
+      </ul>
+    </details>
+  </section>
 
   <section aria-labelledby="cams-h">
     <h2 id="cams-h">Live cameras</h2>

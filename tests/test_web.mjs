@@ -90,3 +90,56 @@ test("heatmap colour step", () => {
   assert.equal(L.heatLevel(30, 30), 4);
   assert.equal(L.heatLevel(15, 30), 2);
 });
+
+// ---------- step 3: the "now + 3 hours" strip ----------
+
+const RULES = { quick_max: 10, slow_min: 25, min_days: 3 };
+
+test("status from the minutes shown (rounded), the same bands every hour", () => {
+  const key = m => (L.statusOf(m, RULES) || {}).key;
+  // 9.4 shows "9 min" -> Quick; 9.5 shows "10 min" -> Moderate; 25 Moderate; 25.5 shows "26" -> Slow
+  assert.deepEqual([9.4, 9.5, 10, 25, 25.4, 25.5, 40].map(key),
+    ["quick", "moderate", "moderate", "moderate", "moderate", "slow", "slow"]);
+  assert.equal(L.statusOf(9, RULES).word, "Quick");
+  assert.equal(L.statusOf(null, RULES), null);
+});
+
+const slot = (median, days, gap) => ({ ride: { median, n: 10, days }, ...(gap ? { gap: { median: gap, n: 8, days } } : {}) });
+const G = {
+  gap_shown: true,
+  live: { window: ["17:20", "18:20"], ride: { median: 22, n: 7 }, gap: { median: 6, n: 9 } },
+  typical: { Fri: { "18": slot(21, 4, 6), "19": slot(17, 4, 7), "20": slot(12, 2, 9), "00": slot(5, 3), "01": slot(4, 3) } },
+};
+
+test("strip at 18:20 on a Friday: live now, then the usual for 19, 20, 21", () => {
+  const b = L.stripBlocks(G, { hour: 18, day: "Fri", rules: RULES });
+  assert.deepEqual(b.map(x => [x.label, x.hh, x.kind]),
+    [["Now", "18", "live"], ["19:00", "19", "usual"], ["20:00", "20", "usual"], ["21:00", "21", "none"]]);
+  assert.deepEqual([b[0].ride, b[0].gap, b[0].status.key, b[0].basis], [22, 6, "moderate", "7 trips"]);
+  assert.deepEqual([b[1].ride, b[1].gap, b[1].status.key, b[1].basis, b[1].rough], [17, 7, "moderate", "4 days", false]);
+  assert.deepEqual([b[2].basis, b[2].rough, b[2].status.key], ["2 days · rough", true, "moderate"]);  // < 3 days
+  assert.deepEqual([b[3].ride, b[3].basis], [null, "Not enough data yet"]);
+});
+
+test("strip after midnight stays on the service day, and ends when buses stop", () => {
+  const b = L.stripBlocks({ ...G, live: { ...G.live, ride: null, gap: null } }, { hour: 0, day: "Fri", rules: RULES });
+  assert.deepEqual(b.map(x => [x.label, x.kind, x.ride]),
+    [["Now", "usual", 5], ["01:00", "usual", 4], ["02:00", "none", null], ["03:00", "none", null]]);
+  assert.equal(b[0].basis, "3 days");                   // no live trips: the usual figure stands in for now
+  assert.equal(b[2].basis, "No buses");
+  assert.equal(b[0].status.key, "quick");
+});
+
+test("no gap where V1 hides it", () => {
+  const b = L.stripBlocks({ ...G, gap_shown: false }, { hour: 18, day: "Fri", rules: RULES });
+  assert.deepEqual(b.map(x => x.gap), [null, null, null, null]);
+});
+
+test("holiday warning line", () => {
+  const cal = (o = {}) => ({ ph: false, ph_eve: false, ph_last_day: false, ...o });
+  assert.equal(L.warningText(cal(), "jb-sg"), "");
+  assert.equal(L.warningText(cal({ ph: true }), "sg-jb"), "Holiday today: may be busier");
+  assert.equal(L.warningText(cal({ ph_eve: true }), "sg-jb"), "Holiday tomorrow: may be busier");
+  assert.equal(L.warningText(cal({ ph_last_day: true }), "jb-sg"), "Last day of a long weekend: the return may be busier");
+  assert.equal(L.warningText(cal({ ph_last_day: true }), "sg-jb"), "");  // the return crush is JB -> SG only
+});

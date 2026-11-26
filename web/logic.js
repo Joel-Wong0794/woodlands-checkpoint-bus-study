@@ -121,3 +121,53 @@ export function heatLevel(v, max, steps = 5) {
   if (v === null || v === undefined) return null;
   return max > 0 ? Math.min(steps - 1, Math.floor((v / max) * steps * 0.9999)) : 0;
 }
+
+// ---------- the "now + 3 hours" strip (step 3) ----------
+
+// Quick / Moderate / Slow from the ride minutes as shown (rounded), the same bands for every hour and direction:
+// < quick_max Quick, up to slow_min Moderate, above it Slow (data.json rules: 10 and 25)
+export function statusOf(min, rules) {
+  if (min === null || min === undefined) return null;
+  const m = Math.round(min);
+  if (m < rules.quick_max) return { key: "quick", word: "Quick" };
+  if (m <= rules.slow_min) return { key: "moderate", word: "Moderate" };
+  return { key: "slow", word: "Slow" };
+}
+
+// Four blocks: now (live: the last hour's trips; if none, the usual figure for this hour), then the next 3 hours
+// (the usual figure for today's weekday at that hour, past 4 weeks). g = one bus group from data.json.
+// Hours belong to the service day, so at 00:30 "now" is still the evening's weekday; past 01:00 there are no buses.
+export function stripBlocks(g, { hour, day, rules }) {
+  const byHour = (g.typical && g.typical[day]) || {};
+  const blocks = [];
+  for (let i = 0; i < 4; i++) {
+    const hh = pad((hour + i) % 24);
+    const b = { hh, label: i === 0 ? "Now" : `${hh}:00`, kind: "none", ride: null, gap: null, status: null,
+      basis: "", rough: false };
+    if (i === 0 && g.live && g.live.ride) {
+      Object.assign(b, { kind: "live", ride: g.live.ride.median, basis: `${g.live.ride.n} trips`,
+        gap: g.gap_shown && g.live.gap ? g.live.gap.median : null });
+    } else if (!HOURS.includes(hh)) {
+      b.basis = "No buses";
+    } else {
+      const s = byHour[hh];
+      if (s && s.ride) {
+        const rough = s.ride.days < rules.min_days;
+        Object.assign(b, { kind: "usual", ride: s.ride.median, rough,
+          basis: plural(s.ride.days, "day") + (rough ? " · rough" : "") });
+      } else b.basis = "Not enough data yet";
+      if (g.gap_shown && s && s.gap) b.gap = s.gap.median;
+    }
+    b.status = statusOf(b.ride, rules);
+    blocks.push(b);
+  }
+  return blocks;
+}
+
+// one short line above the strip on holidays; the strip itself still shows the normal weekday figures
+export function warningText(calendar, dir) {
+  if (calendar.ph) return "Holiday today: may be busier";
+  if (calendar.ph_eve) return "Holiday tomorrow: may be busier";
+  if (calendar.ph_last_day && dir === "jb-sg") return "Last day of a long weekend: the return may be busier";
+  return "";
+}
