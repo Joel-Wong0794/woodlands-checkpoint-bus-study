@@ -6,6 +6,8 @@ How long the bus across the Johor–Singapore Causeway takes, and how often one 
 
 **Live page (phone-friendly):** https://storage.googleapis.com/woodlands-checkpoint-bus-dashboard/causeway-bus-times
 
+**V2 (new design, installable on a phone's home screen):** https://storage.googleapis.com/woodlands-checkpoint-bus-dashboard/v2/index.html
+
 ## What it solves
 
 Many people cross the Causeway between Johor Bahru and Woodlands by bus every day, for work, school or shopping. The questions they ask are simple:
@@ -24,7 +26,7 @@ This project **measures** it instead. It watches the buses every minute, works o
 
 The page shows, per direction and bus:
 
-- **Right now:** gap between buses and ride time over the last hour.
+- **Now and next 3 hours** (V2): the live ride time, then the usual one for each of the next three hours, marked Quick / Moderate / Slow, with how many days each figure is based on. V1 shows the live figures as **Right now** tiles.
 - **Typical <day>, <hour>:** the median over the last 4 weeks for that weekday and hour, with the usual range.
 - **Charts by hour:** ride time and gap between buses, with the best (green) and worst (red) hours to travel.
 
@@ -60,10 +62,13 @@ In short:
 LTA DataMall ──every min──▶ collector.py ──▶ SQLite (raw polls)
                                                  │ every 15 min
                                                  ▼
-                              dashboard.py + trips.py ──▶ dashboard.html
+                              dashboard.py + trips.py ──▶ dashboard.html (V1)
+                                       (compute once)  ──▶ data.json (V2 data)
                                                  │
                                                  ▼
                         Cloud Storage (public bucket) ──▶ phone browser
+                                      ▲                   (V2: web/ page fetches data.json)
+                        web/ (V2 page) ┘ synced by cron
 ```
 
 | Part                | What it does                                                                                         |
@@ -72,7 +77,8 @@ LTA DataMall ──every min──▶ collector.py ──▶ SQLite (raw polls)
 | `collector.py`      | Polls the 4 stops every minute and stores the raw rows                                               |
 | `trips.py`          | Pure functions: GPS positions → bus tracks → rides and departures                                    |
 | `calendar_flags.py` | Singapore and Johor public holidays (`holidays` package), so they stay out of the typical values     |
-| `dashboard.py`      | Builds one static HTML page (Plotly charts) every 15 min, uploaded to a public bucket. No web server |
+| `dashboard.py`      | Every 15 min: computes everything once, then writes the V1 page (static HTML, Plotly charts) and `data.json` for V2. Uploaded to a public bucket. No web server |
+| `web/`              | The V2 page: plain HTML, CSS and JavaScript (no framework, no build step), uPlot charts. Downloads `data.json` and draws it; all maths stays in tested Python |
 | Weekly backup       | Database copied to a private bucket every Sunday, kept for 30 days                                   |
 | `quality_app.py`    | Local Streamlit app to inspect data quality from a database snapshot (not run on the VM)             |
 
@@ -90,7 +96,7 @@ git push (main) ──▶ GitHub Actions: install deps, run the test suite
 
 | Step | Where | What it does |
 | --- | --- | --- |
-| CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Every push and pull request runs the tests on a fresh Ubuntu machine with Python 3.11 (same as the VM) |
+| CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Every push and pull request runs the Python tests on a fresh Ubuntu machine with Python 3.11 (same as the VM), then the V2 page's JavaScript tests with Node's built-in runner |
 | Release gate | Same workflow | Only if every test passes, the `deploy` branch is fast-forwarded to that commit. A failing commit never reaches the VM |
 | CD | [`deploy/update.sh`](deploy/update.sh), cron on the VM | Fetches `deploy` every 5 min and pulls new commits. Reinstalls packages or the crontab only when those files changed. Logs each deploy |
 
