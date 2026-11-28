@@ -6,7 +6,6 @@
   --accent: #3987e5; --band: rgba(57, 135, 229, 0.22);
   --best: rgba(25, 158, 112, 0.30); --worst: rgba(232, 84, 84, 0.26); --dots: #a183ee;
   --hourband: rgba(128, 128, 128, 0.18); --nowline: #8a8984; --cfull: #3987e5;
-  --ramp0: #184f95; --ramp1: #256abf; --ramp2: #3987e5; --ramp3: #6da7ec; --ramp4: #b7d3f6;
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -14,7 +13,6 @@
   --accent: #2a78d6; --band: rgba(42, 120, 214, 0.16);
   --best: rgba(27, 175, 122, 0.20); --worst: rgba(214, 56, 56, 0.16); --dots: #7a4fd1;
   --hourband: rgba(128, 128, 128, 0.18); --nowline: #8a8984; --cfull: #2a78d6;
-  --ramp0: #cde2fb; --ramp1: #86b6ef; --ramp2: #3987e5; --ramp3: #1c5cab; --ramp4: #0d366b;
 }
 
 * { box-sizing: border-box; }
@@ -28,7 +26,7 @@ h3 { font-size: 15px; margin: 20px 0 4px; color: var(--ink2); font-weight: 600; 
 .sub { margin: 2px 0 0; font-size: 14px; }
 .note { font-size: 13px; margin: 4px 0; }
 .msg { background: var(--tile); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
-b, .val { font-variant-numeric: tabular-nums; }
+b { font-variant-numeric: tabular-nums; }
 button, select { font: inherit; color: inherit; }
 button { cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -73,6 +71,11 @@ button { cursor: pointer; transition: background-color .15s ease, color .15s eas
 .blk .st { font-size: 13px; font-weight: 650; }
 .blk.quick .st { color: var(--quick); } .blk.moderate .st { color: var(--moderate); } .blk.slow .st { color: var(--slow); }
 .blk .ev, .blk .ba { font-size: 12px; color: var(--ink2); line-height: 1.35; }
+.blk .lbl { font-size: 11px; color: var(--ink2); margin-top: 4px; }
+.blk .lbl + .big { margin-top: 0; }
+.blk .rl2 { font-size: 12px; color: var(--ink2); line-height: 1.35; margin-top: 2px; }
+.blk .rl2 b { color: var(--ink); font-weight: 650; }
+.blk .rl2 .st { font-size: 12px; }
 .blk.rough .big, .blk.rough .st { opacity: .55; }
 .blk.rough { border-top-style: dashed; }
 .blk:disabled { cursor: default; }
@@ -80,12 +83,11 @@ button { cursor: pointer; transition: background-color .15s ease, color .15s eas
 .howto li { margin: 2px 0; }
 
 /* tiles */
-.tilehead { font-weight: 600; margin: 16px 0 8px; }
-.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.tile { background: var(--tile); border-radius: 12px; padding: 12px 14px; min-width: 0; }
-.lbl { font-size: 13px; color: var(--ink2); }
-.val { font-size: 30px; font-weight: 650; line-height: 1.2; margin: 2px 0; }
-.tile .note { margin: 0; }
+/* the Typical block under the hour picker: the strip's block, full width */
+.blk.wide { width: 100%; margin-top: 16px; padding: 12px 14px 14px; }
+.blk.wide .t { font-size: 15px; white-space: normal; }
+.blk.wide .big { font-size: 40px; }
+.blk.wide .rl2, .blk.wide .rl2 .st, .blk.wide .ba { font-size: 14px; }
 
 /* planner */
 .days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 12px 0 8px; }
@@ -123,12 +125,15 @@ details > summary { cursor: pointer; color: var(--ink2); font-size: 14px; margin
 .heat .hh { color: var(--ink2); text-align: left; overflow: visible; white-space: nowrap; }
 .heat .rl { color: var(--ink2); white-space: nowrap; padding-right: 4px; line-height: 16px; }
 .heat .c { height: 16px; border-radius: 2px; background: var(--tile); }
-.heat .c.l0 { background: var(--ramp0); } .heat .c.l1 { background: var(--ramp1); }
-.heat .c.l2 { background: var(--ramp2); } .heat .c.l3 { background: var(--ramp3); }
-.heat .c.l4 { background: var(--ramp4); }
+/* heatmap squares in the strip's Quick / Moderate / Slow colours (the key and tap caption carry the words) */
+.heat .c.quick, .heatkey i.quick { background: var(--quick); }
+.heat .c.moderate, .heatkey i.moderate { background: var(--moderate); }
+.heat .c.slow, .heatkey i.slow { background: var(--slow); }
 .heat .c.sel { outline: 2px solid var(--ink); outline-offset: 0; }
 .heatkey { display: flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink2); margin: 6px 0; }
-.heatkey i { width: 18px; height: 10px; border-radius: 2px; }
+.heatkey { flex-wrap: wrap; gap: 4px 12px; }
+.heatkey span { display: inline-flex; align-items: center; gap: 4px; }
+.heatkey i { width: 14px; height: 10px; border-radius: 2px; }
 
 /* data collected calendar (as V1) */
 .covgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 40px)); gap: 4px; margin: 6px 0 2px; }
