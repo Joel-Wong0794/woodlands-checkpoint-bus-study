@@ -211,6 +211,16 @@ def test_empty_db(tmp_path):
     assert D.compute(db, now=datetime.fromisoformat(f"{DAY} 12:00")) is None
 
 
+def test_polls_but_no_trips(tmp_path):
+    """Polls in the window but not one trip (fresh install, restore, GPS dark): both pages still build."""
+    db = tmp_path / "causeway.db"
+    fill_db(db, [], f"{DAY} 05:30", f"{DAY} 07:00")
+    now = datetime.fromisoformat(f"{DAY} 07:00:30")
+    assert "<html" in D.build(db, now=now)
+    c = D.compute(db, now=now)
+    assert set(D.data_json(c, now)["directions"]) == set(D.DIRECTIONS)
+
+
 def test_compute_gives_data_for_both_directions(tmp_path):
     """compute() is the data behind both pages (V1 HTML, V2 data.json): one entry per direction, with `days` counts."""
     db = tmp_path / "causeway.db"

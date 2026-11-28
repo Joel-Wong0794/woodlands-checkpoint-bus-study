@@ -843,7 +843,7 @@ def page_html(direction, stats, dates, waits, deps, trips14, days, now, today, l
            coverage_html(cover, today),  # Data collected: which of the 4 weeks behind these charts were polled
            f'<script type="application/json" class="typical" data-dir="{direction}">'
            f"{json.dumps(typical_data(direction, stats, waits), separators=(',', ':'))}</script>"]
-    ok14 = trips14[trips14.ok]
+    ok14 = trips14[trips14.ok.astype(bool)]  # astype: an empty "ok" column is object, which would pick columns
     for group in BUS_ORDER:
         out.append(f'<div class="grp" data-grp="{group_key(group)}">')
         # Typical <day>, <hour>: filled in by the page script from the JSON above
