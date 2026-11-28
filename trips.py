@@ -304,9 +304,15 @@ def add_lost(tracks, trips, gaps, direction="jb-sg"):
 
     # 2) Lost buses: the same walk as find_trips, but remember the Causeway fixes after leaving. A track that ends
     #    with Causeway fixes and no fix at the alighting stop is a lost bus. (Tracks have no gaps over MAX_LOST_MIN:
-    #    link_tracks ends a track then, so "the track ended" = "LTA stopped listing the bus".)
+    #    link_tracks ends a track then, so "the track ended" = "LTA stopped listing the bus", except at the end of the
+    #    data, see below.)
+    # A track whose last fix is within MAX_LOST_MIN of the end of the data may still be going (e.g. a bus on the
+    # Causeway as the dashboard is built): not lost yet, so no guess; the next build sees how it ends.
+    data_end = tracks.t.max()
     est = []
     for tid, g in by_track.items():
+        if (data_end - g.t.iloc[-1]).total_seconds() <= MAX_LOST_MIN * 60:
+            continue
         reached_a = left_a = None
         seen = []  # Causeway fixes since the bus left the boarding stop
         for r in g.itertuples():

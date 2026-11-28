@@ -210,6 +210,15 @@ def test_lost_bus_not_estimated_without_enough_samples():
     assert len(trips[trips.ok]) == 2 and not trips.estimated.any()
 
 
+def test_bus_still_on_causeway_at_end_of_data_is_not_lost():
+    """A bus on the Causeway when the data ends (the dashboard build) may still arrive: no estimated arrival."""
+    buses = every_5_min(24)  # the last bus leaves at 07:57 and arrives at 08:05
+    runs, polls = simulate(buses, f"{DAY} 05:30", f"{DAY} 08:01", direction="sg-jb")
+    trips = measure_trips(runs, polls, services=("170",), direction="sg-jb")
+    assert not trips.estimated.any()
+    assert len(trips[trips.ok]) == 23
+
+
 def test_directions_dont_mix():
     to_sg = random_buses(10, seed=8)
     to_jb = random_buses(10, first="2026-10-09 06:03", seed=9)

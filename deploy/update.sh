@@ -6,7 +6,10 @@ set -e
 cd "$HOME/woodlands-checkpoint-bus-study"
 
 git fetch -q origin deploy
-old=$(git rev-parse HEAD)
+# old = the last commit whose deploy finished (pip and crontab included), kept in git config. Not HEAD: if pip or
+# crontab failed after the merge, HEAD is already new, and comparing with it would skip the failed step for good.
+# (First run: start the record at HEAD, before merging, so even that first deploy can be retried.)
+old=$(git config --get deploy.done) || { old=$(git rev-parse HEAD); git config deploy.done "$old"; }
 new=$(git rev-parse origin/deploy)
 [ "$old" = "$new" ] && exit 0
 
@@ -24,3 +27,5 @@ if echo "$changed" | grep -qx deploy/crontab.txt; then
   crontab deploy/crontab.txt
   echo "  crontab reinstalled"
 fi
+# Every step worked (set -e stops above on any failure, so a failed step is retried in 5 min)
+git config deploy.done "$new"
