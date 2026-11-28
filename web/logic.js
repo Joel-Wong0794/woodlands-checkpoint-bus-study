@@ -116,12 +116,6 @@ export function calendarCells(coverage, today) {
   return cells;
 }
 
-// heatmap: which of 5 colour steps (0 = shortest), scaled from 0 to the longest median on the grid
-export function heatLevel(v, max, steps = 5) {
-  if (v === null || v === undefined) return null;
-  return max > 0 ? Math.min(steps - 1, Math.floor((v / max) * steps * 0.9999)) : 0;
-}
-
 // ---------- the "now + 3 hours" strip (step 3) ----------
 
 // Quick / Moderate / Slow from the ride minutes as shown (rounded), the same bands for every hour and direction:
@@ -143,26 +137,41 @@ export function stripBlocks(g, { hour, day, rules, stale = false }) {
   const blocks = [];
   for (let i = 0; i < 4; i++) {
     const hh = pad((hour + i) % 24);
+    // lead = the big number: the gap between buses where it's shown (the first question at the berth), else the
+    // ride; the same for all four blocks of a bus so they line up
     const b = { hh, label: i === 0 ? "Now" : `${hh}:00`, kind: "none", ride: null, gap: null, status: null,
-      basis: "", rough: false };
+      basis: "", rough: false, lead: g.gap_shown ? "gap" : "ride" };
     if (i === 0 && !stale && g.live && g.live.ride) {
       Object.assign(b, { kind: "live", ride: g.live.ride.median, basis: `${g.live.ride.n} trips`,
         gap: g.gap_shown && g.live.gap ? g.live.gap.median : null });
     } else if (!HOURS.includes(hh)) {
       b.basis = "No buses";
-    } else {
-      const s = byHour[hh];
-      if (s && s.ride) {
-        const rough = s.ride.days < rules.min_days;
-        Object.assign(b, { kind: "usual", ride: s.ride.median, rough,
-          basis: plural(s.ride.days, "day") + (rough ? " · rough" : "") });
-      } else b.basis = "Not enough data yet";
-      if (g.gap_shown && s && s.gap) b.gap = s.gap.median;
-    }
-    b.status = statusOf(b.ride, rules);
+      b.status = null;
+    } else fillUsual(b, byHour[hh], g, rules);
+    if (b.kind === "live") b.status = statusOf(b.ride, rules);
     blocks.push(b);
   }
   return blocks;
+}
+
+// the usual figure for one weekday and hour (s = data.json typical[day][hh]): shared by the strip's later hours
+// and the Typical block under the hour picker, so the two always agree
+function fillUsual(b, s, g, rules) {
+  if (s && s.ride) {
+    const rough = s.ride.days < rules.min_days;
+    Object.assign(b, { kind: "usual", ride: s.ride.median, rough,
+      basis: plural(s.ride.days, "day") + (rough ? " · rough" : "") });
+  } else b.basis = "Not enough data yet";
+  if (g.gap_shown && s && s.gap) b.gap = s.gap.median;
+  b.status = statusOf(b.ride, rules);
+  return b;
+}
+
+// "Typical Friday, 19:00–20:00": the same block as the strip, for the day and hour picked in Plan your day
+export function typicalBlock(g, { day, hour, rules }) {
+  const b = { hh: hour, label: `Typical ${DAY_NAMES[day]}, ${hourLabel(hour)}`, kind: "none", ride: null, gap: null,
+    status: null, basis: "", rough: false, lead: g.gap_shown ? "gap" : "ride" };
+  return fillUsual(b, ((g.typical && g.typical[day]) || {})[hour], g, rules);
 }
 
 // one short line above the strip on holidays; the strip itself still shows the normal weekday figures

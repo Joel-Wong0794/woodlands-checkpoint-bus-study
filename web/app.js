@@ -127,9 +127,30 @@ function renderBar() {
   pressed(grps, "grp", state.grp);
 }
 
-function tile(label, value, note) {
-  return h("div", { class: "tile" }, h("div", { class: "lbl", text: label }), h("div", { class: "val", text: value }),
-    h("p", { class: "note", text: note }));
+
+// One block (strip hour or Typical): "Bus every" as the big number where the gap is shown, then "Ride across N min"
+// with its Quick / Moderate / Slow rating (the bands rate the ride); else the ride is the big number.
+// button: strip blocks are tappable (open that hour in Plan your day); src: show "live" / "usually".
+function blockEl(b, { button = false, src = true } = {}) {
+  const cls = ["blk", b.status ? b.status.key : "none", b.rough ? "rough" : ""].filter(Boolean).join(" ");
+  const from = !src ? "" : b.kind === "live" ? "live" : b.kind === "usual" ? "usually" : "";
+  const num = v => (v === null ? "—" : String(Math.round(v)));
+  const big = (value, what) => [h("span", { class: "lbl", text: what }),
+    h("span", { class: "big" }, num(value), value === null ? null : h("small", { text: "min" }))];
+  const rideLine = h("span", { class: "rl2" }, "Ride across ", h("b", { text: `${num(b.ride)} min` }),
+    b.status ? h("span", { class: "st", text: ` ${b.status.word}` }) : null);
+  const label = [b.label, from,
+    b.gap === null ? "" : `a bus every ${Math.round(b.gap)} min`,
+    b.ride === null ? b.basis : `ride across the Causeway ${num(b.ride)} min, ${b.status.word}`,
+    b.ride === null ? "" : `based on ${b.basis}`].filter(Boolean).join(", ");
+  const attrs = button
+    ? { type: "button", class: cls, "data-strip": b.hh, disabled: !L.HOURS.includes(b.hh), "aria-label": label }
+    : { class: cls + " wide", role: "group", "aria-label": label };
+  return h(button ? "button" : "div", attrs,
+    h("span", { class: "t", text: b.label }), src ? h("span", { class: "src", text: from || " " }) : null,
+    ...(b.lead === "gap" ? [...big(b.gap, "Bus every"), rideLine]
+      : [...big(b.ride, "Ride across"), h("span", { class: "st", text: b.status ? b.status.word : " " })]),
+    h("span", { class: "ba", text: b.basis }));
 }
 
 // Now and next 3 hours: now = live (the hour before the build), later hours = the usual for today's weekday.
@@ -143,21 +164,8 @@ function renderStrip(g) {
   const warn = L.warningText(data.calendar, state.dir);
   $("#warn").hidden = !warn;
   $("#warn").textContent = warn;
-  $("#strip").replaceChildren(...L.stripBlocks(g, { hour: now.hour, day: now.day, rules: data.rules, stale: renderedStale }).map(b => {
-    const cls = ["blk", b.status ? b.status.key : "none", b.rough ? "rough" : ""].filter(Boolean).join(" ");
-    const src = b.kind === "live" ? "live" : b.kind === "usual" ? "usually" : "";
-    const ride = b.ride === null ? "—" : String(Math.round(b.ride));
-    const label = [b.label, src, b.ride === null ? b.basis : `${ride} min ride, ${b.status.word}`,
-      b.gap === null ? "" : `a bus every ${Math.round(b.gap)} min`, b.ride === null ? "" : `based on ${b.basis}`]
-      .filter(Boolean).join(", ");
-    return h("button", { type: "button", class: cls, "data-strip": b.hh, disabled: !L.HOURS.includes(b.hh),
-      "aria-label": label },
-      h("span", { class: "t", text: b.label }), h("span", { class: "src", text: src || " " }),
-      h("span", { class: "big" }, ride, b.ride === null ? null : h("small", { text: "min" })),
-      h("span", { class: "st", text: b.status ? b.status.word : " " }),
-      h("span", { class: "ev", text: b.gap === null ? "" : `every ${Math.round(b.gap)} min` }),
-      h("span", { class: "ba", text: b.basis }));
-  }));
+  $("#strip").replaceChildren(...L.stripBlocks(g, { hour: now.hour, day: now.day, rules: data.rules,
+    stale: renderedStale }).map(b => blockEl(b, { button: true })));
 }
 
 let camsBuilt = false;
@@ -201,13 +209,8 @@ function renderCoverage(page) {
 
 // Typical <day>, <hour>: from the past 4 weeks of that weekday
 function renderTypical(page, g) {
-  const slot = (g.typical[state.day] || {})[state.hour] || {};
-  const gap = !g.gap_shown || !slot.gap ? ["—", "not enough data yet"]
-    : [L.minText(slot.gap.median), L.countText(slot.gap, "buses")];
-  const ride = slot.ride ? [L.minText(slot.ride.median), L.countText(slot.ride, "trips")] : ["—", "not enough data yet"];
-  $("#typical").replaceChildren(
-    h("p", { class: "tilehead", text: `Typical ${L.DAY_NAMES[state.day]}, ${L.hourLabel(state.hour)}` }),
-    h("div", { class: "tiles" }, tile("Bus every", ...gap), tile("Ride", ...ride)));
+  $("#typical").replaceChildren(blockEl(L.typicalBlock(g, { day: state.day, hour: state.hour, rules: data.rules }),
+    { src: false }));
 }
 
 function renderPanel(page, g) {
@@ -258,17 +261,16 @@ function legend(day, g, hasDots) {
 
 function heatmapDetails(page, g) {
   const hm = g.heatmap, ph = new Set(data.ph_dates);
-  const max = Math.max(0, ...hm.median.flat().filter(v => v !== null));
   const cap = h("p", { class: "note", "aria-live": "polite", text: "Tap a square for its figure." });
   const grid = h("div", { class: "heat", role: "grid", "aria-label": TITLES.heat });
   grid.append(h("span", {}), ...hm.hours.map((hh, i) => h("span", { class: "hh", text: i % 3 === 0 ? hh : "" })));
   hm.days.forEach((d, r) => {
     grid.append(h("span", { class: "rl", text: L.dayLabel(d) + (ph.has(d) ? " ★" : "") }));
     hm.hours.forEach((hh, c) => {
-      const v = hm.median[r][c], lvl = L.heatLevel(v, max);
+      const v = hm.median[r][c], st = L.statusOf(v, data.rules);  // same Quick / Moderate / Slow as the strip
       const text = v === null ? `${L.dayLabel(d)}, ${L.slotLabel(hh)}: no trips`
-        : `${L.dayLabel(d)}, ${L.slotLabel(hh)}: ${L.minText(v)}, from ${hm.n[r][c]} trips`;
-      grid.append(h("span", { class: `c${lvl === null ? "" : " l" + lvl}`, title: text, "data-t": text }));
+        : `${L.dayLabel(d)}, ${L.slotLabel(hh)}: ${L.minText(v)} (${st && st.word}), from ${hm.n[r][c]} trips`;
+      grid.append(h("span", { class: `c${st ? " " + st.key : ""}`, title: text, "data-t": text }));
     });
   });
   grid.addEventListener("click", e => {
@@ -278,10 +280,12 @@ function heatmapDetails(page, g) {
     c.classList.add("sel");
     cap.textContent = c.dataset.t;
   });
-  const key = h("div", { class: "heatkey" }, "shorter", ...[0, 1, 2, 3, 4].map(i =>
-    h("i", { style: `background:var(--ramp${i})` })), "longer");
+  const r = data.rules;
+  const key = h("div", { class: "heatkey" }, ...[["quick", `Quick < ${r.quick_max}`],
+    ["moderate", `Moderate ${r.quick_max}–${r.slow_min}`], ["slow", `Slow > ${r.slow_min} min`]]
+    .map(([k, t]) => h("span", {}, h("i", { class: k }), t)));
   return h("details", {}, h("summary", { text: "More detail" }), h("h3", { text: TITLES.heat }),
-    h("p", { class: "note", text: "Darker = longer · ★ public holiday" }),
+    h("p", { class: "note", text: "Ride across the Causeway, by day and hour · ★ public holiday" }),
     hm.days.length ? [grid, key, cap] : h("p", { class: "note", text: "No trips measured yet." }));
 }
 
@@ -329,7 +333,11 @@ function lineChart(el, o) {
   const tip = h("div", { class: "tip", hidden: true, "aria-hidden": "true" });
   const dotsX = o.dots.map(d => L.hourX(d.left.slice(0, 2)) + +d.left.slice(3) / 60);
   const opts = baseOpts(el, o.height || 280, o.ytitle, xtitle);
-  opts.series = [{}, { stroke: accent, width: 2, points: { show: true, size: 7, fill: accent, stroke: accent } },
+  // ride chart: each hour's dot is coloured by its Quick / Moderate / Slow band (drawn in the draw hook below,
+  // with a ring in the background colour so a green dot still shows on a green best-times band)
+  const banded = o.kind === "ride";
+  opts.series = [{}, { stroke: accent, width: 2,
+    points: { show: !banded, size: 7, fill: accent, stroke: accent } },
     { stroke: "transparent", width: 0, points: { show: false } }, { stroke: "transparent", width: 0, points: { show: false } }];
   opts.bands = [{ series: [2, 3], fill: band }];
   opts.hooks = {
@@ -344,6 +352,17 @@ function lineChart(el, o) {
     draw: [u => {
       const ctx = u.ctx;
       ctx.save();
+      if (banded) {
+        ctx.lineWidth = 2 * dpr; ctx.strokeStyle = surface;
+        med.forEach((m, i) => {
+          const st = L.statusOf(m, data.rules);
+          if (!st) return;
+          ctx.fillStyle = css(`--${st.key}`);
+          ctx.beginPath();
+          ctx.arc(u.valToPos(X[i], "x", true), u.valToPos(m, "y", true), 4.5 * dpr, 0, 2 * Math.PI);
+          ctx.fill(); ctx.stroke();
+        });
+      }
       ctx.font = `${11 * dpr}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = ink;
       med.forEach((m, i) => { if (m !== null) ctx.fillText(String(Math.round(m)),
         u.valToPos(X[i], "x", true), u.valToPos(m, "y", true) - 8 * dpr); });

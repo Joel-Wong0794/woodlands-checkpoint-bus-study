@@ -84,13 +84,6 @@ test("coverage calendar: whole weeks Monday to Sunday", () => {
   assert.equal(cells[4].day, 9);
 });
 
-test("heatmap colour step", () => {
-  assert.equal(L.heatLevel(null, 30), null);
-  assert.equal(L.heatLevel(0, 30), 0);
-  assert.equal(L.heatLevel(30, 30), 4);
-  assert.equal(L.heatLevel(15, 30), 2);
-});
-
 // ---------- step 3: the "now + 3 hours" strip ----------
 
 const RULES = { quick_max: 10, slow_min: 25, min_days: 3 };
@@ -175,4 +168,23 @@ test("home-screen manifest points at icons that exist, at the stated sizes", asy
 test("stale data: the Now block stops claiming to be live and shows the usual figure", () => {
   const b = L.stripBlocks(G, { hour: 18, day: "Fri", rules: RULES, stale: true });
   assert.deepEqual([b[0].kind, b[0].ride, b[0].basis], ["usual", 21, "4 days"]);
+});
+
+// ---------- the strip leads with the bus gap (26 Nov, user) ----------
+
+test("strip leads with 'bus every' where the gap is shown, else with the ride", () => {
+  const withGap = L.stripBlocks(G, { hour: 18, day: "Fri", rules: RULES });
+  assert.deepEqual(withGap.map(b => b.lead), ["gap", "gap", "gap", "gap"]);
+  const noGap = L.stripBlocks({ ...G, gap_shown: false }, { hour: 18, day: "Fri", rules: RULES });
+  assert.deepEqual(noGap.map(b => b.lead), ["ride", "ride", "ride", "ride"]);  // same lead across a bus's blocks
+});
+
+test("Typical block for a chosen day and hour: same figures and rules as the strip's usual blocks", () => {
+  const t = L.typicalBlock(G, { day: "Fri", hour: "19", rules: RULES });
+  const s = L.stripBlocks(G, { hour: 18, day: "Fri", rules: RULES })[1];  // the 19:00 block
+  for (const k of ["kind", "ride", "gap", "basis", "rough", "lead"]) assert.deepEqual(t[k], s[k], k);
+  assert.equal(t.status.key, "moderate");
+  assert.equal(t.label, "Typical Friday, 19:00–20:00");
+  const none = L.typicalBlock(G, { day: "Sat", hour: "19", rules: RULES });
+  assert.deepEqual([none.kind, none.ride, none.basis], ["none", null, "Not enough data yet"]);
 });
